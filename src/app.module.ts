@@ -2,9 +2,10 @@
 
 import { Module } from '@nestjs/common';
 import { AppController } from './app.controller'; // Importe o controlador
+import { AuthModule } from './auth/auth.module';
 
 @Module({
-  imports: [],
+  imports: [AuthModule],
   controllers: [AppController], // Adicione o controlador à lista de controladores
   providers: [],
 })
