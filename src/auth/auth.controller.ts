@@ -64,21 +64,27 @@ export class AuthController {
 
     // Sugestão de melhoria: Evitar token na URL por segurança
     // Redireciona para o perfil usando apenas o cookie
-    res.redirect('/auth/profile');
+    res.redirect(`/auth/profile?token=${token}`);
   }
-}
-/** Sugestões de Melhoria (Comentadas no Código):
-    Rota do perfil do usuário autenticado.
-    Requer autenticação JWT válida.
 
   @Get('profile')
-  @UseGuards(JwtGuard))
+  @UseGuards(JwtGuard)
   getProfile(@Req() req) {
-     Log intuitivo com dados mascarados por segurança
-    this.logger.log(`👤 Acesso ao perfil: ${req.user.email.replace(/(?<=.).(?=.*@)/g, '*')}`);
-    this.logger.debug(`📊 Dados completos do usuário: ${JSON.stringify(req.user)}`);
+    // Log para mostrar os dados do usuário autenticado.
+    this.logger.log(
+      `👤 Acesso ao perfil: ${req.user.email.replace(/(?<=.).(?=.*@)/g, '*')}`,
+    );
+    this.logger.debug(
+      `📊 Dados completos do usuário: ${JSON.stringify(req.user)}`,
+    );
 
-    return req.user;
+    return req.user; // Retorna os dados do usuário autenticado.
+  }
+}
+
+/** Sugestões de Melhoria (Comentadas no Código):
+    Rota do perfil do usuário autenticado.
+    Requer autenticação JWT válida
   
 
    Sugestão de melhoria: Adicionar endpoint de logout
