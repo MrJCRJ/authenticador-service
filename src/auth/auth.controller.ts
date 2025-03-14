@@ -40,7 +40,7 @@ export class AuthController {
     this.logger.log('Cookie "jwt" definido com sucesso.');
 
     // Redireciona para a página de perfil.
-    res.redirect('/auth/profile');
+    res.redirect(`/auth/profile?token=${token}`);
   }
 
   @Get('profile')

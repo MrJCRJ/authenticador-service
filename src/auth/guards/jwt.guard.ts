@@ -12,7 +12,10 @@ export class JwtGuard extends AuthGuard('jwt') {
     // Log para mostrar todos os cookies recebidos.
     this.logger.log(`Cookies recebidos: ${JSON.stringify(request.cookies)}`);
 
-    const token = request.cookies?.jwt; // Extrai o token do cookie.
+    const tokenFromUrl = request.query.token; // Extrai o token da URL.
+    const tokenFromCookie = request.cookies?.jwt;
+
+    const token = tokenFromUrl || tokenFromCookie;
 
     // Log para verificar se o cookie está presente.
     this.logger.log(`Cookie 'jwt' encontrado: ${!!token}`);
