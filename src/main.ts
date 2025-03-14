@@ -6,10 +6,14 @@ import { NestFactory } from '@nestjs/core';
 // Importa o módulo principal da aplicação, que contém todos os controladores, provedores e outros módulos.
 import { AppModule } from './app.module';
 
+import cookieParser from 'cookie-parser';
+
 // Função assíncrona que inicializa a aplicação.
 async function bootstrap() {
   // Cria uma instância da aplicação NestJS usando o módulo principal (AppModule).
   const app = await NestFactory.create(AppModule);
+
+  app.use(cookieParser());
 
   // Inicia o servidor HTTP e faz com que a aplicação escute na porta especificada.
   // A porta é obtida a partir da variável de ambiente PORT, ou usa 3000 como padrão caso PORT não esteja definida.
