@@ -52,8 +52,14 @@ export class AuthService {
 
       return payload;
     } catch (error) {
-      // Log de erro: token inválido ou expirado.
-      this.logger.error(`❌ Falha na validação do token: ${error.message}`);
+      // Verifica se o erro é uma instância de Error antes de acessar a propriedade message.
+      if (error instanceof Error) {
+        // Log de erro: token inválido ou expirado.
+        this.logger.error(`❌ Falha na validação do token: ${error.message}`);
+      } else {
+        // Log de erro genérico caso o erro não seja uma instância de Error.
+        this.logger.error('❌ Falha na validação do token: Erro desconhecido');
+      }
 
       return null; // Retorna null para tokens inválidos ou expirados.
     }
