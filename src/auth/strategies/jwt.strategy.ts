@@ -52,7 +52,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     );
 
     // Retorna o payload do token (geralmente contém informações do usuário).
-    return { userId: payload.sub, email: payload.email };
+    return { name: payload.sub, email: payload.email };
   }
 }
 

@@ -64,7 +64,7 @@ export class AuthController {
 
     // Sugestão de melhoria: Evitar token na URL por segurança
     // Redireciona para o perfil usando apenas o cookie
-    res.redirect(`/auth/profile?token=${token}`);
+    res.redirect(`http://localhost:5500?token=${token}`);
   }
 
   @Get('profile')

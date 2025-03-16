@@ -26,7 +26,7 @@ async function bootstrap() {
 
   // Habilita o CORS (Cross-Origin Resource Sharing) para permitir requisições de diferentes origens.
   app.enableCors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000', // Permite requisições do frontend.
+    origin: process.env.FRONTEND_URL || 'http://localhost:5500', // Permite requisições do frontend.
     credentials: true, // Permite o envio de cookies e headers de autenticação.
   });
   logger.log('🌍 CORS configurado com sucesso!');
