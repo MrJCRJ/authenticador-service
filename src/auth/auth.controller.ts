@@ -1,76 +1,121 @@
 // src/auth/auth.controller.ts
-import { Controller, Get, Req, UseGuards, Res } from '@nestjs/common';
+import { Controller, Get, Req, UseGuards, Res, Post } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { JwtGuard } from './guards/jwt.guard';
 import { AuthService } from './auth.service';
 import { Logger } from '@nestjs/common';
+import { Response, Request } from 'express';
+import axios, { AxiosError } from 'axios';
 
 @Controller('auth')
 export class AuthController {
-  // Logger personalizado com emojis para logs divertidos e intuitivos 🎉
   private readonly logger = new Logger(AuthController.name);
 
   constructor(private readonly authService: AuthService) {}
 
-  /**
-   * Rota de autenticação via Google.
-   * Redireciona o usuário para a página de login do Google automaticamente.
-   */
   @Get('google')
   @UseGuards(AuthGuard('google'))
   async googleAuth() {
-    // Log divertido: início do processo de autenticação
     this.logger.log('🔑 Iniciando autenticação via Google...');
-    // Não é necessária implementação - o AuthGuard cuida do redirecionamento!
   }
 
-  /**
-   * Callback da autenticação Google.
-   * Gera um token JWT, define um cookie seguro e redireciona para o perfil.
-   */
   @Get('google/callback')
   @UseGuards(AuthGuard('google'))
-  async googleAuthRedirect(@Req() req, @Res() res) {
-    // Log intuitivo: processo de callback iniciado
+  async googleAuthRedirect(@Req() req, @Res() res: Response) {
     this.logger.log('🔄 Processando callback do Google...');
 
-    // Sugestão de melhoria: Validar se o usuário existe antes de gerar o token
     if (!req.user) {
       this.logger.error('❌ Nenhum usuário retornado pelo Google');
       return res.redirect('/auth/error');
     }
 
     const user = req.user;
-    // Gera o token JWT com dados do usuário
-    const token = this.authService.generateToken(user);
+    const googleAccessToken = req.user.accessToken; // Token de acesso do Google
 
-    // Log divertido: token gerado (⚠️ cuidado com logs sensíveis em produção!)
+    // Armazena o token de acesso do Google em um cookie seguro
+    res.cookie('google_access_token', googleAccessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 3600000, // 1 hora de validade
+      path: '/',
+    });
+
     this.logger.log(
-      `🎫 Token JWT gerado: ${token.slice(0, 15)}... (truncado por segurança)`,
+      '🍪 Cookie do token de acesso do Google definido com sucesso!',
     );
 
-    // Configurações seguras para o cookie
-    const cookieOptions = {
-      httpOnly: true, // Blinda contra ataques XSS
-      secure: process.env.NODE_ENV === 'production', // HTTPS apenas em produção
-      sameSite: 'strict' as const, // Proteção contra CSRF
+    // Gera o token JWT da aplicação
+    const jwtToken = this.authService.generateToken(user);
+    res.cookie('jwt', jwtToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
       maxAge: 3600000, // 1 hora de validade
-      path: '/', // Disponível em todas as rotas
-    };
+      path: '/',
+    });
 
-    // Define o cookie JWT na resposta
-    res.cookie('jwt', token, cookieOptions);
     this.logger.log('🍪 Cookie JWT definido com sucesso!');
 
-    // Sugestão de melhoria: Evitar token na URL por segurança
-    // Redireciona para o perfil usando apenas o cookie
-    res.redirect(`http://localhost:5500?token=${token}`);
+    // Redireciona para o frontend
+    res.redirect('http://localhost:5500');
+  }
+
+  @Post('logout')
+  async logout(@Req() req: Request, @Res() res: Response) {
+    const googleAccessToken = req.cookies.google_access_token; // Obtém o token de acesso do Google
+
+    if (googleAccessToken) {
+      try {
+        // Revoga o token de acesso do Google
+        await axios.post('https://oauth2.googleapis.com/revoke', null, {
+          params: {
+            token: googleAccessToken, // Token de acesso do Google
+          },
+        });
+
+        this.logger.log('🔑 Token do Google revogado com sucesso!');
+      } catch (error) {
+        if (error instanceof AxiosError) {
+          this.logger.error(
+            '❌ Erro ao revogar o token do Google:',
+            error.message,
+          );
+        } else {
+          this.logger.error(
+            '❌ Erro desconhecido ao revogar o token do Google:',
+            error,
+          );
+        }
+      }
+    }
+
+    // Remove os cookies
+    res.clearCookie('jwt', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      path: '/',
+    });
+
+    res.clearCookie('google_access_token', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      path: '/',
+    });
+
+    this.logger.log('👋 Usuário deslogado com sucesso!');
+
+    // Retorna uma resposta de sucesso
+    res
+      .status(200)
+      .json({ success: true, message: 'Logout realizado com sucesso' });
   }
 
   @Get('profile')
   @UseGuards(JwtGuard)
   getProfile(@Req() req) {
-    // Log para mostrar os dados do usuário autenticado.
     this.logger.log(
       `👤 Acesso ao perfil: ${req.user.email.replace(/(?<=.).(?=.*@)/g, '*')}`,
     );
@@ -78,7 +123,7 @@ export class AuthController {
       `📊 Dados completos do usuário: ${JSON.stringify(req.user)}`,
     );
 
-    return req.user; // Retorna os dados do usuário autenticado.
+    return req.user;
   }
 }
 

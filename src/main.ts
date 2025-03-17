@@ -1,48 +1,52 @@
 // src/main.ts
 
-// Importa a função NestFactory do pacote @nestjs/core, que é usada para criar uma instância da aplicação NestJS.
 import { NestFactory } from '@nestjs/core';
-
-// Importa o módulo principal da aplicação, que contém todos os controladores, provedores e outros módulos.
 import { AppModule } from './app.module';
-
-// Importa o cookie-parser para manipulação de cookies.
 import cookieParser from 'cookie-parser';
-
-// Importa o Logger do NestJS para logs personalizados.
+import session from 'express-session';
 import { Logger } from '@nestjs/common';
 
-// Função assíncrona que inicializa a aplicação.
 async function bootstrap() {
-  // Cria uma instância da aplicação NestJS usando o módulo principal (AppModule).
   const app = await NestFactory.create(AppModule);
-
-  // Logger personalizado para o bootstrap, com emojis para logs divertidos e intuitivos 🎉
   const logger = new Logger('Bootstrap');
 
   // Middleware para manipulação de cookies.
   app.use(cookieParser());
   logger.log('🍪 Cookie-parser configurado com sucesso!');
 
-  // Habilita o CORS (Cross-Origin Resource Sharing) para permitir requisições de diferentes origens.
+  // Configuração do express-session.
+  app.use(
+    session({
+      secret: process.env.SESSION_SECRET || 'sua_chave_secreta_aqui', // Chave secreta para assinar a sessão.
+      resave: false, // Evita regravar a sessão se não houver alterações.
+      saveUninitialized: false, // Não salva sessões não inicializadas.
+      cookie: {
+        secure: process.env.NODE_ENV === 'production', // Cookies seguros apenas em produção (HTTPS).
+        httpOnly: true, // Impede acesso ao cookie via JavaScript no navegador.
+        maxAge: 1000 * 60 * 60 * 24, // Tempo de vida do cookie (1 dia).
+      },
+    }),
+  );
+  logger.log('🔒 Express-session configurado com sucesso!');
+
+  // Configuração do CORS.
   app.enableCors({
     origin: process.env.FRONTEND_URL || 'http://localhost:5500', // Permite requisições do frontend.
     credentials: true, // Permite o envio de cookies e headers de autenticação.
   });
   logger.log('🌍 CORS configurado com sucesso!');
 
-  // Inicia o servidor HTTP e faz com que a aplicação escute na porta especificada.
-  // A porta é obtida a partir da variável de ambiente PORT, ou usa 3000 como padrão caso PORT não esteja definida.
+  // Inicia o servidor HTTP.
   const port = process.env.PORT || 3000;
   await app.listen(port);
 
   // Exibe uma mensagem no console indicando que a aplicação está rodando e em qual porta.
   logger.log(`🚀 Aplicação rodando em: ${await app.getUrl()}`);
+  logger.log(`🏁 Ambiente: ${process.env.NODE_ENV || 'development'}`);
 }
 
 // Chama a função bootstrap para iniciar a aplicação.
 bootstrap().catch((error) => {
-  // Log de erro caso ocorra algum problema durante a inicialização.
   const logger = new Logger('Bootstrap');
   logger.error(`💥 Falha ao iniciar a aplicação: ${error.message}`);
   process.exit(1); // Encerra o processo com código de erro.
