@@ -15,6 +15,7 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
       scope: ['email', 'profile'], // Escopos solicitados ao Google.
       passReqToCallback: true, // Passa a requisição para o método `validate`.
       state: true, // Habilita o uso de parâmetros personalizados.
+      proxy: true, // Habilita o suporte a proxies reversos.
     });
 
     this.logger.log('🚀 Estratégia Google configurada com sucesso!');
