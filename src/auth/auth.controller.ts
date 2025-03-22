@@ -72,7 +72,7 @@ export class AuthController {
     res.cookie('google_access_token', googleAccessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      sameSite: 'none',
       maxAge: 3600000,
       path: '/',
     });
@@ -88,7 +88,7 @@ export class AuthController {
     res.cookie('jwt', jwtToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      sameSite: 'none',
       maxAge: 3600000,
       path: '/',
     });
@@ -144,21 +144,21 @@ export class AuthController {
     res.clearCookie('jwt', {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      sameSite: 'none',
       path: '/',
     });
 
     res.clearCookie('google_access_token', {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      sameSite: 'none',
       path: '/',
     });
 
     res.clearCookie('frontend_origin', {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      sameSite: 'none',
       path: '/',
     });
 
