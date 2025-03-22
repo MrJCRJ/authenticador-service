@@ -24,7 +24,7 @@ async function bootstrap() {
         httpOnly: true, // Impede acesso ao cookie via JavaScript no navegador.
         maxAge: 1000 * 60 * 60 * 24, // Tempo de vida do cookie (1 dia).
         domain: '.vercel.app', // Permite cookies para subdomínios do Vercel
-        sameSite: 'none', // Permite cookies em requisições entre domínios
+        sameSite: 'lax', // Permite cookies em requisições entre domínios
       },
     }),
   );
@@ -33,11 +33,11 @@ async function bootstrap() {
   // Configuração do CORS.
   const allowedOrigins = process.env.FRONTEND_URLS
     ? process.env.FRONTEND_URLS.split(',')
-    : ['http://localhost:5501']; // Fallback para desenvolvimento local.
+    : ['https://my-history-frontend.vercel.app']; // Domínio do frontend
 
   app.enableCors({
-    origin: allowedOrigins, // Permite requisições dos frontends listados.
-    credentials: true, // Permite o envio de cookies e headers de autenticação.
+    origin: allowedOrigins,
+    credentials: true, // Permite o envio de cookies
   });
   logger.log('🌍 CORS configurado com sucesso!');
 
