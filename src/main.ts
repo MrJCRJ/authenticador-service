@@ -23,6 +23,8 @@ async function bootstrap() {
         secure: process.env.NODE_ENV === 'production', // Cookies seguros apenas em produção (HTTPS).
         httpOnly: true, // Impede acesso ao cookie via JavaScript no navegador.
         maxAge: 1000 * 60 * 60 * 24, // Tempo de vida do cookie (1 dia).
+        domain: '.vercel.app', // Permite cookies para subdomínios do Vercel
+        sameSite: 'none', // Permite cookies em requisições entre domínios
       },
     }),
   );
