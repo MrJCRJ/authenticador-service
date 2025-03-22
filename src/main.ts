@@ -1,5 +1,4 @@
 // src/main.ts
-
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import cookieParser from 'cookie-parser';
@@ -30,8 +29,12 @@ async function bootstrap() {
   logger.log('🔒 Express-session configurado com sucesso!');
 
   // Configuração do CORS.
+  const allowedOrigins = process.env.FRONTEND_URLS
+    ? process.env.FRONTEND_URLS.split(',')
+    : ['http://localhost:5501']; // Fallback para desenvolvimento local.
+
   app.enableCors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:5500', // Permite requisições do frontend.
+    origin: allowedOrigins, // Permite requisições dos frontends listados.
     credentials: true, // Permite o envio de cookies e headers de autenticação.
   });
   logger.log('🌍 CORS configurado com sucesso!');
