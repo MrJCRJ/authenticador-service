@@ -37,8 +37,8 @@ export class AuthController {
       this.logger.warn('⚠️ Nenhuma URL de frontend fornecida.');
     }
 
-    // Agora redirecionamos para a autenticação real
-    res.redirect('/auth/google');
+    const state = encodeURIComponent(redirectUrl);
+    res.redirect(`/auth/google?state=${state}`);
   }
 
   @Get('google')
@@ -62,7 +62,7 @@ export class AuthController {
     const user = req.user;
     const googleAccessToken = req.user.accessToken;
 
-    const frontendOrigin = req.session.frontendOrigin;
+    const frontendOrigin = decodeURIComponent(req.query.state);
 
     if (!frontendOrigin) {
       this.logger.error('❌ Nenhuma URL de frontend encontrada na sessão.');
