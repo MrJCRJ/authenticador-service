@@ -48,6 +48,7 @@ export class AuthController {
   }
 
   @Get('google/callback')
+  @UseGuards(AuthGuard('google'))
   async googleAuthRedirect(@Req() req, @Res() res: Response) {
     this.logger.log('🔄 Processando callback do Google...');
     this.logger.log(`🔗 Sessão atual: ${JSON.stringify(req.session)}`);
