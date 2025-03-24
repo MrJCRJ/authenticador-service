@@ -16,7 +16,7 @@ import { JwtGuard } from './guards/jwt.guard';
 
     // PassportModule para configurar autenticação com Passport.
     // Define 'jwt' como a estratégia padrão.
-    PassportModule.register({ defaultStrategy: 'jwt' }),
+    PassportModule.register({}),
 
     // JwtModule para configurar a geração e validação de tokens JWT.
     // Usa registerAsync para carregar configurações dinamicamente.
