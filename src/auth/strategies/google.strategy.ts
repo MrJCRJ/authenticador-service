@@ -30,6 +30,11 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
   ): Promise<any> {
     this.logger.log('🔍 Validando usuário autenticado via Google...');
 
+    if (!profile || !accessToken) {
+      console.log('❌ Falha na autenticação do Google!');
+      return done(new Error('Falha na autenticação do Google'), false);
+    }
+
     const { name, emails, photos } = profile;
 
     const user = {

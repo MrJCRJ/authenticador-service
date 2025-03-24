@@ -42,8 +42,7 @@ export class AuthController {
   }
 
   @Get('google')
-  @UseGuards(AuthGuard('google'))
-  async googleAuth() {
+  async googleAuth(@Req() req, @Res() res: Response) {
     this.logger.log('🔄 Redirecionando para o Google...');
   }
 
