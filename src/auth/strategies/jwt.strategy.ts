@@ -3,6 +3,7 @@ import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy, StrategyOptions } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
+import { Algorithm } from 'jsonwebtoken';
 
 /**
  * Interface para tipagem do payload JWT
@@ -14,13 +15,11 @@ interface JwtPayload {
   picture?: string; // URL da foto do usuário (opcional)
   iat?: number; // Timestamp de quando o token foi emitido
   exp?: number; // Timestamp de quando o token expira
-  // Adicione outros campos conforme necessário
 }
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
   private readonly logger = new Logger(JwtStrategy.name);
-  private readonly strategyOptions: StrategyOptions;
 
   constructor(configService: ConfigService) {
     const options: StrategyOptions = {
@@ -36,11 +35,10 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       secretOrKey: configService.getOrThrow<string>('JWT_SECRET'),
       audience: configService.get<string>('JWT_AUDIENCE'),
       issuer: configService.get<string>('JWT_ISSUER'),
-      algorithms: [configService.get<string>('JWT_ALGORITHM', 'HS256')],
+      algorithms: ['HS256'] as Algorithm[], // Tipo corrigido
     };
 
     super(options);
-    this.strategyOptions = options;
 
     this.logger.log({
       message: '🔐 Estratégia JWT configurada com sucesso',
@@ -60,10 +58,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
    */
   async validate(payload: JwtPayload): Promise<any> {
     try {
-      // Validação completa do payload
       this.validatePayload(payload);
-
-      // Log estruturado
       this.logStructuredPayload(payload);
 
       return {
@@ -102,7 +97,6 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       );
     }
 
-    // Validação adicional do formato do email
     if (!this.isValidEmail(payload.email)) {
       throw new Error('Email no payload JWT não é válido');
     }

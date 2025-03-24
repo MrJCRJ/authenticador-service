@@ -1,5 +1,14 @@
 // src/auth/auth.controller.ts
-import { Controller, Get, Req, UseGuards, Res, Post } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Req,
+  UseGuards,
+  Res,
+  Post,
+  UnauthorizedException,
+  UseFilters,
+} from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { JwtGuard } from './guards/jwt.guard';
 import { AuthService } from './auth.service';
@@ -9,6 +18,8 @@ import axios, { AxiosError } from 'axios';
 import * as jwt from 'jsonwebtoken';
 import { ConfigService } from '@nestjs/config';
 import { CookieOptions } from 'express';
+import { Throttle } from '@nestjs/throttler';
+import { AuthExceptionFilter } from './filters/auth-exception.filter';
 
 interface GoogleAuthRequest extends Request {
   query: {
@@ -16,7 +27,7 @@ interface GoogleAuthRequest extends Request {
     code?: string;
     error?: string;
     redirect?: string;
-    message?: string; // Adicione esta linha
+    message?: string;
   };
 }
 
@@ -26,9 +37,9 @@ interface GoogleUser {
   email: string;
   name: string;
   picture?: string;
-  id?: string; // Adicione um ID se necessário
-  locale?: string; // Idioma preferido
-  verified?: boolean; // Se o email é verificado
+  id?: string;
+  locale?: string;
+  verified?: boolean;
 }
 
 declare module 'express-session' {
@@ -39,6 +50,7 @@ declare module 'express-session' {
 }
 
 @Controller('auth')
+@UseFilters(AuthExceptionFilter)
 export class AuthController {
   private readonly logger = new Logger(AuthController.name);
 
@@ -52,9 +64,7 @@ export class AuthController {
       httpOnly: true,
       secure: this.configService.get('NODE_ENV') === 'production',
       sameSite:
-        this.configService.get('NODE_ENV') === 'production'
-          ? 'none'
-          : ('lax' as const),
+        this.configService.get('NODE_ENV') === 'production' ? 'none' : 'lax',
       maxAge: 3600000,
       path: '/',
       domain: this.configService.get('COOKIE_DOMAIN') || undefined,
@@ -63,8 +73,14 @@ export class AuthController {
 
   private isValidUrl(url: string): boolean {
     try {
-      new URL(url);
-      return url.startsWith('http://') || url.startsWith('https://');
+      const parsedUrl = new URL(url);
+      const allowedOrigins =
+        this.configService.get('ALLOWED_ORIGINS')?.split(',') || [];
+      return (
+        ['http:', 'https:'].includes(parsedUrl.protocol) &&
+        (allowedOrigins.includes('*') ||
+          allowedOrigins.includes(parsedUrl.origin))
+      );
     } catch {
       return false;
     }
@@ -89,6 +105,8 @@ export class AuthController {
       redirect_missing: 'URL de redirecionamento não fornecida',
       auth_failed: 'Falha na autenticação com Google',
       invalid_state: 'Parâmetro state inválido',
+      invalid_user: 'Usuário não autorizado',
+      rate_limit: 'Muitas requisições. Tente novamente mais tarde.',
       default: 'Erro desconhecido durante a autenticação',
     };
 
@@ -96,6 +114,7 @@ export class AuthController {
   }
 
   @Get('google/init')
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   async googleAuthInit(@Req() req: GoogleAuthRequest, @Res() res: Response) {
     const redirectUrl =
       typeof req.query.redirect === 'string' ? req.query.redirect : null;
@@ -111,11 +130,11 @@ export class AuthController {
     const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
     authUrl.searchParams.append(
       'client_id',
-      this.configService.get('GOOGLE_CLIENT_ID')!,
+      this.configService.getOrThrow('GOOGLE_CLIENT_ID'),
     );
     authUrl.searchParams.append(
       'redirect_uri',
-      this.configService.get('GOOGLE_CALLBACK_URL')!,
+      this.configService.getOrThrow('GOOGLE_CALLBACK_URL'),
     );
     authUrl.searchParams.append('response_type', 'code');
     authUrl.searchParams.append('scope', 'email profile');
@@ -123,6 +142,7 @@ export class AuthController {
     authUrl.searchParams.append('access_type', 'offline');
     authUrl.searchParams.append('prompt', 'consent');
 
+    this.logger.log(`🔗 Iniciando autenticação para: ${redirectUrl}`);
     return res.redirect(authUrl.toString());
   }
 
@@ -145,25 +165,32 @@ export class AuthController {
       }
 
       const user = req.user as GoogleUser | undefined;
-      if (!user?.accessToken) {
-        throw new Error('Falha na autenticação do usuário');
+      if (!user?.accessToken || !this.validateUser(user)) {
+        throw new UnauthorizedException('Usuário não autorizado');
       }
 
-      const jwtToken = this.authService.generateToken(user);
+      // Gera token de acesso
+      const token = this.authService.generateToken(user);
 
-      // Envie os dados para o frontend via query params ou cookies
+      // Configura cookies
+      const cookieOptions = this.getCookieOptions();
+      res.cookie('jwt', token, cookieOptions);
+
+      // Redireciona com token e dados do usuário
       const redirectUrl = new URL(frontendOrigin);
-      redirectUrl.searchParams.append('token', jwtToken);
+      redirectUrl.searchParams.append('token', token);
       redirectUrl.searchParams.append(
         'user',
         JSON.stringify({
           email: user.email,
           name: user.name,
           picture: user.picture,
-          // Não envie tokens sensíveis aqui
         }),
       );
 
+      this.logger.log(
+        `✅ Autenticação bem-sucedida para: ${this.obfuscateEmail(user.email)}`,
+      );
       return res.redirect(redirectUrl.toString());
     } catch (error) {
       const errorMessage =
@@ -173,57 +200,91 @@ export class AuthController {
     }
   }
 
+  private validateUser(user: GoogleUser): boolean {
+    // Implemente sua lógica de validação de usuário aqui
+    // Por exemplo, verificar se o email está em uma lista de domínios permitidos
+    return !!user.email;
+  }
+
+  private obfuscateEmail(email: string): string {
+    const [name, domain] = email.split('@');
+    return `${name[0]}${'*'.repeat(Math.max(0, name.length - 1))}@${domain}`;
+  }
+
   @Post('logout')
   async logout(@Req() req: Request, @Res() res: Response) {
     this.logger.log('🔑 Iniciando logout...');
 
-    let googleAccessToken: string | undefined;
-    if (req.cookies.google_access_token) {
-      googleAccessToken = req.cookies.google_access_token;
-    } else if (req.cookies.jwt) {
-      try {
-        const decoded = jwt.verify(
-          req.cookies.jwt,
-          this.configService.get('JWT_SECRET'),
-        ) as { accessToken?: string };
-        googleAccessToken = decoded.accessToken;
-      } catch (error) {
-        this.logger.warn('⚠️ Não foi possível recuperar o token do JWT');
-      }
-    }
-
+    // Tenta revogar o token do Google
+    const googleAccessToken = this.extractGoogleToken(req);
     if (googleAccessToken) {
-      try {
-        await axios.post('https://oauth2.googleapis.com/revoke', null, {
-          params: { token: googleAccessToken },
-        });
-        this.logger.log('🔑 Token do Google revogado com sucesso!');
-      } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : 'Erro desconhecido';
-        this.logger.error('❌ Erro ao revogar token:', errorMessage);
-      }
+      await this.revokeGoogleToken(googleAccessToken);
     }
 
-    const cookieOptions = this.getCookieOptions();
-    res.clearCookie('jwt', cookieOptions);
-    res.clearCookie('google_access_token', cookieOptions);
-
-    req.session.destroy((err) => {
-      if (err) {
-        this.logger.error('❌ Erro ao destruir sessão:', err);
-      }
-    });
+    // Limpa cookies e sessão
+    this.clearAuthCookies(res);
+    await this.destroySession(req);
 
     this.logger.log('👋 Logout realizado com sucesso');
     return res.status(200).json({ success: true });
+  }
+
+  private extractGoogleToken(req: Request): string | undefined {
+    if (req.cookies.google_access_token) {
+      return req.cookies.google_access_token;
+    }
+
+    try {
+      const decoded = jwt.verify(
+        req.cookies.jwt,
+        this.configService.getOrThrow('JWT_SECRET'),
+      ) as { accessToken?: string };
+      return decoded.accessToken;
+    } catch {
+      this.logger.warn('⚠️ Não foi possível recuperar o token do JWT');
+      return undefined;
+    }
+  }
+
+  private async revokeGoogleToken(token: string): Promise<void> {
+    try {
+      await axios.post('https://oauth2.googleapis.com/revoke', null, {
+        params: { token },
+      });
+      this.logger.log('🔑 Token do Google revogado com sucesso!');
+    } catch (error) {
+      const errorMessage =
+        error instanceof AxiosError
+          ? error.response?.data?.error || error.message
+          : 'Erro desconhecido';
+      this.logger.error('❌ Erro ao revogar token:', errorMessage);
+    }
+  }
+
+  private clearAuthCookies(res: Response): void {
+    const cookieOptions = this.getCookieOptions();
+    res.clearCookie('jwt', cookieOptions);
+    res.clearCookie('google_access_token', cookieOptions);
+  }
+
+  private destroySession(req: Request): Promise<void> {
+    return new Promise((resolve, reject) => {
+      req.session.destroy((err) => {
+        if (err) {
+          this.logger.error('❌ Erro ao destruir sessão:', err);
+          reject(err);
+        } else {
+          resolve();
+        }
+      });
+    });
   }
 
   @Get('profile')
   @UseGuards(JwtGuard)
   getProfile(@Req() req: Request) {
     const user = req.user as GoogleUser;
-    this.logger.log(`👤 Acesso ao perfil: ${user.email}`);
+    this.logger.log(`👤 Acesso ao perfil: ${this.obfuscateEmail(user.email)}`);
 
     return {
       email: user.email,
@@ -231,66 +292,6 @@ export class AuthController {
       picture: user.picture,
       locale: user.locale,
       verified: user.verified,
-      // Exclua dados sensíveis como tokens
     };
   }
 }
-
-/** Sugestões de Melhoria (Comentadas no Código):
-    Rota do perfil do usuário autenticado.
-    Requer autenticação JWT válida
-  
-
-   Sugestão de melhoria: Adicionar endpoint de logout
-   @Get('logout')
-   logout(@Res() res) {
-    res.clearCookie('jwt');
-     this.logger.log('🚪 Usuário deslogado com sucesso');
-     return res.redirect('/');
-   
-     Sugestões de Melhoria (Para Implementar):
-Validação de Dados do Usuário
-
-typescript
-Copy
-// Antes de gerar o token:
-// if (!this.authService.isValidUser(user)) {
-//   this.logger.warn(`Tentativa de login com usuário inválido: ${user.email}`);
-//   throw new UnauthorizedException('Usuário não autorizado');
-// }
-Monitoramento de Atividade
-
-typescript
-Copy
-// Após o login bem-sucedido:
-// this.authService.trackLoginActivity(user.id, req.ip);
-Tokens de Atualização
-
-typescript
-Copy
-// Gerar refresh token junto com o access token:
-// const { accessToken, refreshToken } = this.authService.generateTokens(user);
-// res.cookie('refreshToken', refreshToken, { ... });
-Proteção Contra Flood
-
-typescript
-Copy
-// Adicionar decorador de rate limiting:
-// @Throttle({ default: { limit: 5, ttl: 30000 } })
-Tratamento de Erros Global
-
-typescript
-Copy
-// Adicionar filtro de exceções personalizado:
-// @UseFilters(new AuthExceptionFilter())
-
-
-Exemplo de Saída de Logs:
-Copy
-🔑 Iniciando autenticação via Google...
-🔄 Processando callback do Google...
-🎫 Token JWT gerado: eyJhbGciOiJIUzI1NiIs... (truncado por segurança)
-🍪 Cookie JWT definido com sucesso!
-👤 Acesso ao perfil: j****@gmail.com
-
-  */
