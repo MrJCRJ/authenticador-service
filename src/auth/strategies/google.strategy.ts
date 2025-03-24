@@ -1,14 +1,19 @@
 // src/auth/strategies/google.strategy.ts
 import { Injectable, Logger } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
-import { Strategy } from 'passport-google-oauth20';
+import { Strategy, VerifyCallback } from 'passport-google-oauth20';
 import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
 
 interface GoogleProfile {
-  emails: { value: string }[];
+  id: string;
+  emails: { value: string; verified: boolean }[];
   displayName?: string;
+  name?: { givenName?: string; familyName?: string };
   photos?: { value: string }[];
+  _json?: {
+    locale?: string;
+  };
 }
 
 @Injectable()
@@ -17,100 +22,92 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
 
   constructor(configService: ConfigService) {
     super({
-      clientID: configService.get('GOOGLE_CLIENT_ID'),
-      clientSecret: configService.get('GOOGLE_CLIENT_SECRET'),
-      callbackURL: configService.get('GOOGLE_CALLBACK_URL'),
-      scope: ['email', 'profile'],
+      clientID: configService.getOrThrow('GOOGLE_CLIENT_ID'),
+      clientSecret: configService.getOrThrow('GOOGLE_CLIENT_SECRET'),
+      callbackURL: configService.getOrThrow('GOOGLE_CALLBACK_URL'),
+      scope: configService.get('GOOGLE_SCOPES')?.split(',') || [
+        'email',
+        'profile',
+      ],
       passReqToCallback: true,
     });
   }
 
+  /**
+   * Valida o perfil do usuário autenticado via Google OAuth
+   * @param req Objeto de requisição HTTP
+   * @param accessToken Token de acesso do Google
+   * @param refreshToken Token de atualização do Google
+   * @param profile Perfil do usuário retornado pelo Google
+   * @param done Callback do Passport
+   * @returns Objeto com dados do usuário ou erro
+   */
   async validate(
     req: Request,
     accessToken: string,
     refreshToken: string,
-    profile: any,
+    profile: GoogleProfile,
+    done: VerifyCallback,
   ): Promise<any> {
-    const state = req.query.state;
-    if (!state) {
-      throw new Error('State parameter required');
-    }
+    try {
+      // 1️⃣ Validação do parâmetro state (para proteção CSRF)
+      const state = req.query.state;
+      if (!state) {
+        throw new Error('Parâmetro state é obrigatório para proteção CSRF');
+      }
 
-    return {
-      id: profile.id,
-      email: profile.emails[0].value,
-      name: profile.displayName,
-      picture: profile.photos?.[0]?.value,
-      locale: profile._json?.locale,
-      verified: profile.emails[0].verified,
-      accessToken,
-      refreshToken,
-    };
+      // 2️⃣ Validação dos dados do perfil
+      if (!profile.emails || !profile.emails.length) {
+        throw new Error('Perfil do Google não contém informações de email');
+      }
+
+      const primaryEmail = profile.emails[0];
+      if (!primaryEmail.verified) {
+        throw new Error('Email do Google não verificado');
+      }
+
+      // 3️⃣ Construção do objeto do usuário
+      const user = {
+        provider: 'google',
+        providerId: profile.id,
+        email: primaryEmail.value,
+        name:
+          profile.displayName || profile.name?.givenName || 'Usuário Google',
+        picture: profile.photos?.[0]?.value || null,
+        locale: profile._json?.locale || 'pt-BR',
+        accessToken,
+        refreshToken, // Incluído para possíveis renovações de token
+      };
+
+      // 4️⃣ Log estruturado
+      this.logStructuredAuthInfo(user, req);
+
+      // 5️⃣ Retorno do usuário autenticado
+      done(null, user);
+    } catch (error) {
+      this.logger.error(`💥 Falha na autenticação com Google: ${error}`);
+      done(error, null);
+    }
+  }
+
+  /**
+   * Registra informações estruturadas sobre a autenticação
+   * @param user Dados do usuário autenticado
+   * @param req Objeto de requisição HTTP
+   */
+  private logStructuredAuthInfo(user: any, req: Request): void {
+    this.logger.log({
+      message: 'Autenticação via Google realizada com sucesso',
+      user: {
+        id: user.providerId,
+        email: user.email,
+        name: user.name,
+      },
+      request: {
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+        timestamp: new Date().toISOString(),
+      },
+    });
   }
 }
-
-/**Sugestões de Melhorias (Comentadas no Código):
-Validação de Dados do Perfil:
-
-Adicione uma verificação para garantir que os campos emails, name e photos estão presentes no perfil.
-
-typescript
-Copy
-if (!emails || !name || !photos) {
-  this.logger.error('❌ Dados do perfil do Google incompletos.');
-  done(new Error('Dados do perfil incompletos'), null);
-  return;
-}
-Suporte a Refresh Token:
-
-Se necessário, você pode armazenar o refreshToken para renovar o accessToken quando ele expirar.
-
-typescript
-Copy
-const user = {
-  email: emails[0].value,
-  name: name.givenName,
-  picture: photos[0].value,
-  accessToken,
-  refreshToken, // Adiciona o refreshToken ao objeto do usuário.
-};
-Logs Estruturados:
-
-Use logs estruturados (em formato JSON) para facilitar a análise em ferramentas de monitoramento.
-
-typescript
-Copy
-this.logger.log({
-  message: 'Usuário autenticado via Google',
-  user: {
-    email: user.email,
-    name: user.name,
-    picture: user.picture,
-  },
-});
-Tratamento de Erros:
-
-Adicione um bloco try-catch para capturar e tratar possíveis erros durante a validação.
-
-typescript
-Copy
-try {
-  // Processo de validação...
-} catch (error) {
-  this.logger.error(`💥 Erro durante a validação do usuário: ${error.message}`);
-  done(error, null);
-}
-Configuração Dinâmica:
-
-Permita que os escopos (scope) sejam configurados dinamicamente via variáveis de ambiente.
-
-typescript
-Copy
-scope: process.env.GOOGLE_SCOPES?.split(',') || ['email', 'profile'],
-Testes Automatizados:
-
-Escreva testes unitários e de integração para garantir que a estratégia funcione corretamente em diferentes cenários.
-
-Documentação:
-
-Adicione uma documentação clara usando JSDoc para explicar o propósito da estratégia e como ela deve ser usada. */
