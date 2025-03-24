@@ -43,13 +43,9 @@ export class AuthController {
   }
 
   @Get('google')
+  @UseGuards(AuthGuard('google')) // ✅ Usa o Passport corretamente!
   async googleAuth(@Req() req: Request, @Res() res: Response) {
     this.logger.log('🔄 Redirecionando para o Google...');
-
-    return passport.authenticate('google', {
-      scope: ['email', 'profile'],
-      state: req.query.state as string, // Converte para string se necessário.
-    })(req, res);
   }
 
   @Get('google/callback')
