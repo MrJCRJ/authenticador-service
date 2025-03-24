@@ -111,3 +111,20 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
     });
   }
 }
+
+/**Próximas Melhorias Possíveis:
+Armazenamento de Refresh Token:
+
+Implementar lógica para renovação automática de tokens
+
+Testes Automatizados:
+
+Mock do Passport e Google OAuth para testes
+
+Métricas:
+
+Integração com sistemas de monitoramento
+
+Customização:
+
+Permitir mapeamento customizado de campos do perfil */
