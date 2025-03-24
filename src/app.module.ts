@@ -1,45 +1,67 @@
 // src/app.module.ts
 
-// Importa o decorador `Module` do pacote @nestjs/common, que é usado para definir um módulo no NestJS.
 import { Module, Logger } from '@nestjs/common';
-
-// Importa o controlador principal da aplicação.
 import { AppController } from './app.controller';
-
-// Importa o módulo de autenticação, que contém controladores, provedores e outros componentes relacionados à autenticação.
 import { AuthModule } from './auth/auth.module';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { PassportModule } from '@nestjs/passport';
+import * as Joi from 'joi'; // Para validação de variáveis de ambiente
 
-// Importa o ConfigModule para carregar variáveis de ambiente.
-import { ConfigModule } from '@nestjs/config';
-
-// Define o módulo principal da aplicação usando o decorador @Module.
 @Module({
-  // A lista de módulos importados.
   imports: [
-    // ConfigModule para carregar variáveis de ambiente de forma global.
     ConfigModule.forRoot({
-      isGlobal: true, // Torna as variáveis de ambiente disponíveis em toda a aplicação.
-      envFilePath: `.env.${process.env.NODE_ENV || 'development'}`, // Carrega o arquivo .env correspondente ao ambiente.
+      isGlobal: true,
+      envFilePath: `.env.${process.env.NODE_ENV || 'development'}`,
+      validationSchema: Joi.object({
+        NODE_ENV: Joi.string()
+          .valid('development', 'production', 'test')
+          .default('development'),
+        PORT: Joi.number().default(3000),
+        SESSION_SECRET: Joi.string().required(),
+        GOOGLE_CLIENT_ID: Joi.string().required(),
+        GOOGLE_CLIENT_SECRET: Joi.string().required(),
+        FRONTEND_URLS: Joi.string().required(),
+        JWT_SECRET: Joi.string().required(),
+      }),
+      validationOptions: {
+        allowUnknown: true,
+        abortEarly: true,
+      },
     }),
 
-    // AuthModule para funcionalidades de autenticação e autorização.
+    // Configuração global do Passport
+    PassportModule.register({
+      defaultStrategy: 'google',
+      session: true,
+    }),
+
     AuthModule,
   ],
-
-  // A lista de controladores que pertencem a este módulo.
   controllers: [AppController],
-
-  // A lista de provedores (services, repositories, etc.) que pertencem a este módulo.
   providers: [],
 })
-// Exporta a classe AppModule, que representa o módulo principal da aplicação.
 export class AppModule {
-  // Logger personalizado para o AppModule, com emojis para logs divertidos e intuitivos 🎉
   private readonly logger = new Logger(AppModule.name);
 
-  constructor() {
-    // Log intuitivo: confirma que o módulo foi carregado com sucesso.
+  constructor(private readonly configService: ConfigService) {
+    this.logConfiguration();
+  }
+
+  private logConfiguration() {
     this.logger.log('🚀 Módulo principal da aplicação carregado com sucesso!');
+    this.logger.log(`🏷️ Ambiente: ${this.configService.get('NODE_ENV')}`);
+    this.logger.log(
+      `🌍 Frontend URLs: ${this.configService.get('FRONTEND_URLS')}`,
+    );
+
+    // Log seguro (não mostra valores sensíveis)
+    this.logger.log('🔑 Configuração do Google OAuth:');
+    this.logger.log(
+      `- Client ID: ${this.configService.get('GOOGLE_CLIENT_ID') ? '✔️ Configurado' : '❌ Ausente'}`,
+    );
+    this.logger.log(
+      `- Client Secret: ${this.configService.get('GOOGLE_CLIENT_SECRET') ? '✔️ Configurado' : '❌ Ausente'}`,
+    );
   }
 }
 

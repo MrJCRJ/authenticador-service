@@ -4,57 +4,79 @@ import { AppModule } from './app.module';
 import cookieParser from 'cookie-parser';
 import session from 'express-session';
 import { Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  const configService = app.get(ConfigService);
   const logger = new Logger('Bootstrap');
 
-  // Middleware para manipulação de cookies.
+  // Middleware para manipulação de cookies
   app.use(cookieParser());
   logger.log('🍪 Cookie-parser configurado com sucesso!');
 
-  // Configuração do express-session.
+  // Configuração do express-session
   app.use(
     session({
-      secret: process.env.SESSION_SECRET || 'sua_chave_secreta_aqui', // Chave secreta para assinar a sessão.
-      resave: false, // Evita regravar a sessão se não houver alterações.
-      saveUninitialized: false, // Não salva sessões não inicializadas.
+      secret: configService.get('SESSION_SECRET') || 'sua_chave_secreta_aqui',
+      resave: false,
+      saveUninitialized: false,
       cookie: {
-        secure: process.env.NODE_ENV === 'production', // Cookies seguros apenas em produção (HTTPS).
-        httpOnly: true, // Impede acesso ao cookie via JavaScript no navegador.
-        maxAge: 1000 * 60 * 60 * 24, // Tempo de vida do cookie (1 dia).
-        domain: '.vercel.app', // Permite cookies para subdomínios do Vercel
-        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+        secure: configService.get('NODE_ENV') === 'production',
+        httpOnly: true,
+        maxAge: 24 * 60 * 60 * 1000, // 1 dia
+        sameSite:
+          configService.get('NODE_ENV') === 'production' ? 'none' : 'lax',
+        ...(configService.get('NODE_ENV') === 'production' && {
+          domain: configService.get('COOKIE_DOMAIN'),
+        }),
       },
     }),
   );
   logger.log('🔒 Express-session configurado com sucesso!');
 
-  // Configuração do CORS.
-  const allowedOrigins = process.env.FRONTEND_URLS
-    ? process.env.FRONTEND_URLS.split(',')
-    : ['https://my-history-frontend.vercel.app']; // Domínio do frontend
+  // Configuração robusta do CORS
+  const allowedOrigins = [
+    'http://localhost:5500',
+    'http://127.0.0.1:5500',
+    ...(configService.get('FRONTEND_URLS')?.split(',') || []),
+  ].filter(Boolean);
 
   app.enableCors({
-    origin: allowedOrigins,
-    credentials: true, // Permite o envio de cookies
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        logger.warn(
+          `⚠️ Tentativa de acesso de origem não permitida: ${origin}`,
+        );
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    credentials: true,
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-Requested-With',
+      'Accept',
+    ],
+    exposedHeaders: ['Authorization'],
   });
-  logger.log('🌍 CORS configurado com sucesso!');
+  logger.log(`🌍 CORS configurado para origens: ${allowedOrigins.join(', ')}`);
 
-  // Inicia o servidor HTTP.
-  const port = process.env.PORT || 3000;
+  // Inicia o servidor HTTP
+  const port = configService.get('PORT') || 3000;
   await app.listen(port);
 
-  // Exibe uma mensagem no console indicando que a aplicação está rodando e em qual porta.
   logger.log(`🚀 Aplicação rodando em: ${await app.getUrl()}`);
-  logger.log(`🏁 Ambiente: ${process.env.NODE_ENV || 'development'}`);
+  logger.log(`🏁 Ambiente: ${configService.get('NODE_ENV') || 'development'}`);
 }
 
-// Chama a função bootstrap para iniciar a aplicação.
 bootstrap().catch((error) => {
   const logger = new Logger('Bootstrap');
   logger.error(`💥 Falha ao iniciar a aplicação: ${error.message}`);
-  process.exit(1); // Encerra o processo com código de erro.
+  process.exit(1);
 });
 
 /**Sugestões de Melhoria (Para Implementar):

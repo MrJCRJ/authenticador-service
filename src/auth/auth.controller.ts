@@ -6,13 +6,35 @@ import { AuthService } from './auth.service';
 import { Logger } from '@nestjs/common';
 import { Response, Request } from 'express';
 import axios, { AxiosError } from 'axios';
-import 'express-session'; // Importa o módulo express-session para estender suas definições
 import * as jwt from 'jsonwebtoken';
-import * as passport from 'passport';
+import { ConfigService } from '@nestjs/config';
+import { CookieOptions } from 'express';
+
+interface GoogleAuthRequest extends Request {
+  query: {
+    state?: string;
+    code?: string;
+    error?: string;
+    redirect?: string;
+    message?: string; // Adicione esta linha
+  };
+}
+
+interface GoogleUser {
+  accessToken: string;
+  refreshToken?: string;
+  email: string;
+  name: string;
+  picture?: string;
+  id?: string; // Adicione um ID se necessário
+  locale?: string; // Idioma preferido
+  verified?: boolean; // Se o email é verificado
+}
 
 declare module 'express-session' {
   interface SessionData {
-    frontendOrigin?: string; // Adiciona a propriedade frontendOrigin ao tipo SessionData
+    frontendOrigin?: string;
+    user?: GoogleUser;
   }
 }
 
@@ -20,167 +42,197 @@ declare module 'express-session' {
 export class AuthController {
   private readonly logger = new Logger(AuthController.name);
 
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly configService: ConfigService,
+  ) {}
 
-  @Get('google/init')
-  async googleAuthInit(@Req() req: Request, @Res() res: Response) {
-    this.logger.log('🔗 Iniciando autenticação com Google...');
-    this.logger.log(`🔗 Query parameters: ${JSON.stringify(req.query)}`);
-
-    const redirectUrl = req.query.redirect as string;
-
-    if (redirectUrl) {
-      req.session.frontendOrigin = redirectUrl;
-      this.logger.log(
-        `🔗 Frontend de origem armazenado na sessão: ${redirectUrl}`,
-      );
-    } else {
-      this.logger.warn('⚠️ Nenhuma URL de frontend fornecida.');
-    }
-
-    const state = encodeURIComponent(redirectUrl);
-    res.redirect(`/auth/google?state=${state}`);
+  private getCookieOptions(): CookieOptions {
+    return {
+      httpOnly: true,
+      secure: this.configService.get('NODE_ENV') === 'production',
+      sameSite:
+        this.configService.get('NODE_ENV') === 'production'
+          ? 'none'
+          : ('lax' as const),
+      maxAge: 3600000,
+      path: '/',
+      domain: this.configService.get('COOKIE_DOMAIN') || undefined,
+    };
   }
 
-  @Get('google')
-  @UseGuards(AuthGuard('google')) // ✅ Usa o Passport corretamente!
-  async googleAuth(@Req() req: Request, @Res() res: Response) {
-    this.logger.log('🔄 Redirecionando para o Google...');
+  private isValidUrl(url: string): boolean {
+    try {
+      new URL(url);
+      return url.startsWith('http://') || url.startsWith('https://');
+    } catch {
+      return false;
+    }
+  }
+
+  @Get('error')
+  authError(@Req() req: GoogleAuthRequest, @Res() res: Response) {
+    const message =
+      typeof req.query.message === 'string'
+        ? req.query.message
+        : 'unknown_error';
+    this.logger.error(`❌ Erro de autenticação: ${message}`);
+
+    return res.status(401).json({
+      error: 'Authentication Error',
+      message: this.getErrorMessage(message),
+    });
+  }
+
+  private getErrorMessage(code: string): string {
+    const messages: Record<string, string> = {
+      redirect_missing: 'URL de redirecionamento não fornecida',
+      auth_failed: 'Falha na autenticação com Google',
+      invalid_state: 'Parâmetro state inválido',
+      default: 'Erro desconhecido durante a autenticação',
+    };
+
+    return messages[code] || messages.default;
+  }
+
+  @Get('google/init')
+  async googleAuthInit(@Req() req: GoogleAuthRequest, @Res() res: Response) {
+    const redirectUrl =
+      typeof req.query.redirect === 'string' ? req.query.redirect : null;
+
+    if (!redirectUrl || !this.isValidUrl(redirectUrl)) {
+      this.logger.error('⚠️ URL de redirecionamento inválida ou não fornecida');
+      return res.redirect('/auth/error?message=redirect_missing');
+    }
+
+    const state = Buffer.from(redirectUrl).toString('base64');
+    req.session.frontendOrigin = redirectUrl;
+
+    const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+    authUrl.searchParams.append(
+      'client_id',
+      this.configService.get('GOOGLE_CLIENT_ID')!,
+    );
+    authUrl.searchParams.append(
+      'redirect_uri',
+      this.configService.get('GOOGLE_CALLBACK_URL')!,
+    );
+    authUrl.searchParams.append('response_type', 'code');
+    authUrl.searchParams.append('scope', 'email profile');
+    authUrl.searchParams.append('state', state);
+    authUrl.searchParams.append('access_type', 'offline');
+    authUrl.searchParams.append('prompt', 'consent');
+
+    return res.redirect(authUrl.toString());
   }
 
   @Get('google/callback')
   @UseGuards(AuthGuard('google'))
-  async googleAuthRedirect(@Req() req, @Res() res: Response) {
-    this.logger.log('🔄 Processando callback do Google...');
-    this.logger.log(`🔗 Sessão atual: ${JSON.stringify(req.session)}`);
-    this.logger.log(`🔗 Usuário autenticado: ${JSON.stringify(req.user)}`);
+  async googleAuthRedirect(
+    @Req() req: GoogleAuthRequest,
+    @Res() res: Response,
+  ) {
+    try {
+      if (!req.query.state || typeof req.query.state !== 'string') {
+        throw new Error('Parâmetro state inválido ou ausente');
+      }
 
-    if (!req.user) {
-      this.logger.error('❌ Nenhum usuário retornado pelo Google');
-      return res.redirect('/auth/error');
+      const frontendOrigin = Buffer.from(req.query.state, 'base64').toString(
+        'utf-8',
+      );
+      if (!this.isValidUrl(frontendOrigin)) {
+        throw new Error('URL de redirecionamento inválida');
+      }
+
+      const user = req.user as GoogleUser | undefined;
+      if (!user?.accessToken) {
+        throw new Error('Falha na autenticação do usuário');
+      }
+
+      const jwtToken = this.authService.generateToken(user);
+
+      // Envie os dados para o frontend via query params ou cookies
+      const redirectUrl = new URL(frontendOrigin);
+      redirectUrl.searchParams.append('token', jwtToken);
+      redirectUrl.searchParams.append(
+        'user',
+        JSON.stringify({
+          email: user.email,
+          name: user.name,
+          picture: user.picture,
+          // Não envie tokens sensíveis aqui
+        }),
+      );
+
+      return res.redirect(redirectUrl.toString());
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Erro desconhecido';
+      this.logger.error(`❌ Erro no callback: ${errorMessage}`);
+      return res.redirect('/auth/error?message=auth_failed');
     }
-
-    const user = req.user;
-    const googleAccessToken = req.user.accessToken;
-
-    const frontendOrigin = decodeURIComponent(req.query.state);
-
-    if (!frontendOrigin) {
-      this.logger.error('❌ Nenhuma URL de frontend encontrada na sessão.');
-      return res.redirect('/auth/error');
-    }
-
-    res.cookie('google_access_token', googleAccessToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'none',
-      maxAge: 3600000,
-      path: '/',
-    });
-
-    this.logger.log(
-      '🍪 Cookie do token de acesso do Google definido com sucesso!',
-    );
-
-    const jwtToken = this.authService.generateToken({
-      ...user,
-      googleAccessToken,
-    });
-    res.cookie('jwt', jwtToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'none',
-      maxAge: 3600000,
-      path: '/',
-    });
-
-    this.logger.log('🍪 Cookie JWT definido com sucesso!');
-
-    res.redirect(frontendOrigin);
   }
 
   @Post('logout')
   async logout(@Req() req: Request, @Res() res: Response) {
     this.logger.log('🔑 Iniciando logout...');
-    let googleAccessToken = req.cookies.google_access_token;
 
-    // Se não encontrou no cookie, tenta pegar do JWT
-    if (!googleAccessToken && req.cookies.jwt) {
+    let googleAccessToken: string | undefined;
+    if (req.cookies.google_access_token) {
+      googleAccessToken = req.cookies.google_access_token;
+    } else if (req.cookies.jwt) {
       try {
         const decoded = jwt.verify(
           req.cookies.jwt,
-          process.env.JWT_SECRET,
-        ) as any;
-        googleAccessToken = decoded.googleAccessToken;
+          this.configService.get('JWT_SECRET'),
+        ) as { accessToken?: string };
+        googleAccessToken = decoded.accessToken;
       } catch (error) {
         this.logger.warn('⚠️ Não foi possível recuperar o token do JWT');
       }
     }
 
     if (googleAccessToken) {
-      this.logger.log('🔑 Revogando token do Google...');
       try {
         await axios.post('https://oauth2.googleapis.com/revoke', null, {
           params: { token: googleAccessToken },
         });
         this.logger.log('🔑 Token do Google revogado com sucesso!');
       } catch (error) {
-        if (error instanceof AxiosError) {
-          this.logger.error(
-            '❌ Erro ao revogar o token do Google:',
-            error.message,
-          );
-        } else {
-          this.logger.error(
-            '❌ Erro desconhecido ao revogar o token do Google:',
-            error,
-          );
-        }
+        const errorMessage =
+          error instanceof Error ? error.message : 'Erro desconhecido';
+        this.logger.error('❌ Erro ao revogar token:', errorMessage);
       }
-    } else {
-      this.logger.warn('⚠️ Nenhum token do Google encontrado para revogação.');
     }
 
-    // Remove os cookies
-    res.clearCookie('jwt', {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'none',
-      path: '/',
+    const cookieOptions = this.getCookieOptions();
+    res.clearCookie('jwt', cookieOptions);
+    res.clearCookie('google_access_token', cookieOptions);
+
+    req.session.destroy((err) => {
+      if (err) {
+        this.logger.error('❌ Erro ao destruir sessão:', err);
+      }
     });
 
-    res.clearCookie('google_access_token', {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'none',
-      path: '/',
-    });
-
-    res.clearCookie('frontend_origin', {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'none',
-      path: '/',
-    });
-
-    this.logger.log('👋 Usuário deslogado com sucesso!');
-
-    res
-      .status(200)
-      .json({ success: true, message: 'Logout realizado com sucesso' });
+    this.logger.log('👋 Logout realizado com sucesso');
+    return res.status(200).json({ success: true });
   }
 
   @Get('profile')
   @UseGuards(JwtGuard)
-  getProfile(@Req() req) {
-    this.logger.log(
-      `👤 Acesso ao perfil: ${req.user.email.replace(/(?<=.).(?=.*@)/g, '*')}`,
-    );
-    this.logger.debug(
-      `📊 Dados completos do usuário: ${JSON.stringify(req.user)}`,
-    );
+  getProfile(@Req() req: Request) {
+    const user = req.user as GoogleUser;
+    this.logger.log(`👤 Acesso ao perfil: ${user.email}`);
 
-    return req.user;
+    return {
+      email: user.email,
+      name: user.name,
+      picture: user.picture,
+      locale: user.locale,
+      verified: user.verified,
+      // Exclua dados sensíveis como tokens
+    };
   }
 }
 

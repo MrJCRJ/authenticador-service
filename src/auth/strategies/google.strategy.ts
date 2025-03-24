@@ -1,55 +1,51 @@
 // src/auth/strategies/google.strategy.ts
 import { Injectable, Logger } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
-import { Strategy, VerifyCallback } from 'passport-google-oauth20';
+import { Strategy } from 'passport-google-oauth20';
+import { ConfigService } from '@nestjs/config';
+import { Request } from 'express';
+
+interface GoogleProfile {
+  emails: { value: string }[];
+  displayName?: string;
+  photos?: { value: string }[];
+}
 
 @Injectable()
 export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
   private readonly logger = new Logger(GoogleStrategy.name);
 
-  constructor() {
+  constructor(configService: ConfigService) {
     super({
-      clientID: process.env.GOOGLE_CLIENT_ID, // ID do cliente Google.
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET, // Segredo do cliente Google.
-      callbackURL: process.env.GOOGLE_CALLBACK_URL, // URL de callback após a autenticação.
-      scope: ['email', 'profile'], // Escopos solicitados ao Google.
-      passReqToCallback: true, // Passa a requisição para o método `validate`.
-      state: true, // Habilita o uso de parâmetros personalizados.
-      proxy: true, // Habilita o suporte a proxies reversos.
+      clientID: configService.get('GOOGLE_CLIENT_ID'),
+      clientSecret: configService.get('GOOGLE_CLIENT_SECRET'),
+      callbackURL: configService.get('GOOGLE_CALLBACK_URL'),
+      scope: ['email', 'profile'],
+      passReqToCallback: true,
     });
-
-    this.logger.log('🚀 Estratégia Google configurada com sucesso!');
   }
 
   async validate(
-    req: any, // A requisição é passada graças ao `passReqToCallback`.
+    req: Request,
     accessToken: string,
     refreshToken: string,
     profile: any,
-    done: VerifyCallback,
   ): Promise<any> {
-    this.logger.log('🔍 Validando usuário autenticado via Google...');
-
-    if (!profile || !accessToken) {
-      console.log('❌ Falha na autenticação do Google!');
-      return done(new Error('Falha na autenticação do Google'), false);
+    const state = req.query.state;
+    if (!state) {
+      throw new Error('State parameter required');
     }
 
-    const { name, emails, photos } = profile;
-
-    const user = {
-      email: emails[0].value,
-      name: name.givenName,
-      picture: photos[0].value,
+    return {
+      id: profile.id,
+      email: profile.emails[0].value,
+      name: profile.displayName,
+      picture: profile.photos?.[0]?.value,
+      locale: profile._json?.locale,
+      verified: profile.emails[0].verified,
       accessToken,
+      refreshToken,
     };
-
-    this.logger.log(`👤 Usuário autenticado: ${user.name} (${user.email})`);
-    this.logger.log(`📸 Foto do usuário: ${user.picture}`);
-
-    done(null, user);
-
-    this.logger.log('✅ Validação do usuário concluída com sucesso!');
   }
 }
 

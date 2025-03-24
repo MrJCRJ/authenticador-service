@@ -1,31 +1,74 @@
 // src/app.controller.ts
 
-// Importa o decorador `Controller` e `Get` do pacote @nestjs/common.
-// `Controller` é usado para definir uma classe como um controlador no NestJS.
-// `Get` é um decorador que define um método para lidar com requisições HTTP GET.
-import { Controller, Get, Logger } from '@nestjs/common';
+import { Controller, Get, Logger, Res, Req } from '@nestjs/common';
+import { Response, Request } from 'express';
+import { ConfigService } from '@nestjs/config';
 
-// Define a classe `AppController` como um controlador usando o decorador @Controller.
-// O decorador @Controller pode receber um prefixo de rota como argumento (por exemplo, @Controller('api')).
-// Se nenhum prefixo for fornecido, as rotas definidas neste controlador serão acessíveis a partir da raiz da aplicação.
 @Controller()
 export class AppController {
-  // Logger personalizado para o AppController, com emojis para logs divertidos e intuitivos 🎉
   private readonly logger = new Logger(AppController.name);
 
+  constructor(private readonly configService: ConfigService) {}
+
   /**
-   * Rota raiz da aplicação.
-   * Responde a requisições HTTP GET na rota '/' com uma mensagem de boas-vindas.
-   *
-   * @returns Uma string simples com a mensagem "Hello World!".
+   * Rota raiz da aplicação - agora com mais informações
    */
   @Get()
-  getHello(): string {
-    // Log intuitivo: requisição recebida na rota raiz.
-    this.logger.log('🌍 Requisição GET recebida na rota raiz.');
+  getAppInfo(@Req() req: Request, @Res() res: Response) {
+    this.logger.log('🌍 Requisição GET recebida na rota raiz');
 
-    // Retorna uma string simples como resposta para a requisição GET.
-    return 'Hello World!';
+    const appInfo = {
+      status: 'online',
+      environment: this.configService.get('NODE_ENV'),
+      version: '1.0.0',
+      session: req.session?.id ? 'active' : 'inactive',
+      authEndpoints: {
+        google: '/auth/google/init',
+        profile: '/auth/profile',
+        logout: '/auth/logout',
+      },
+      docs: '/api-docs', // Se tiver Swagger/OpenAPI
+    };
+
+    // Log adicional para debugging
+    this.logger.debug(`Informações da sessão: ${JSON.stringify(req.session)}`);
+    this.logger.debug(`Headers: ${JSON.stringify(req.headers)}`);
+
+    return res.json(appInfo);
+  }
+
+  /**
+   * Rota de health check para monitoramento
+   */
+  @Get('health')
+  getHealthCheck() {
+    this.logger.log('🩺 Health check executado');
+    return { status: 'ok', timestamp: new Date().toISOString() };
+  }
+
+  /**
+   * Rota de informações de configuração (apenas em desenvolvimento)
+   */
+  @Get('config')
+  getConfig(@Res() res: Response) {
+    if (this.configService.get('NODE_ENV') !== 'development') {
+      return res.status(403).json({ error: 'Acesso negado' });
+    }
+
+    this.logger.warn(
+      '⚠️ Acesso ao endpoint de configuração em desenvolvimento',
+    );
+
+    const safeConfig = {
+      env: this.configService.get('NODE_ENV'),
+      port: this.configService.get('PORT'),
+      frontendUrls: this.configService.get('FRONTEND_URLS'),
+      googleAuthConfigured: !!this.configService.get('GOOGLE_CLIENT_ID'),
+      sessionSecretConfigured: !!this.configService.get('SESSION_SECRET'),
+      jwtConfigured: !!this.configService.get('JWT_SECRET'),
+    };
+
+    return res.json(safeConfig);
   }
 }
 

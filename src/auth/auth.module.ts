@@ -8,38 +8,62 @@ import { AuthController } from './auth.controller';
 import { GoogleStrategy } from './strategies/google.strategy';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtGuard } from './guards/jwt.guard';
+import * as Joi from 'joi';
 
 @Module({
   imports: [
-    // ConfigModule para carregar variáveis de ambiente.
-    ConfigModule.forRoot(),
-
-    // PassportModule para configurar autenticação com Passport.
-    // Define 'jwt' como a estratégia padrão.
-    PassportModule.register({ defaultStrategy: 'jwt' }),
-
-    // JwtModule para configurar a geração e validação de tokens JWT.
-    // Usa registerAsync para carregar configurações dinamicamente.
-    JwtModule.registerAsync({
-      imports: [ConfigModule], // Depende do ConfigModule para acessar variáveis de ambiente.
-      useFactory: async (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET'), // Chave secreta para assinar tokens.
-        signOptions: { expiresIn: '1h' }, // Tempo de expiração do token (1 hora).
+    ConfigModule.forRoot({
+      validationSchema: Joi.object({
+        JWT_SECRET: Joi.string().required(),
+        JWT_EXPIRES_IN: Joi.string().default('1h'),
+        JWT_ISSUER: Joi.string().default('my-app'),
+        GOOGLE_CLIENT_ID: Joi.string().required(),
+        GOOGLE_CLIENT_SECRET: Joi.string().required(),
+        GOOGLE_CALLBACK_URL: Joi.string().required(),
+        COOKIE_DOMAIN: Joi.string().optional(),
       }),
-      inject: [ConfigService], // Injeta o ConfigService para uso no useFactory.
+    }),
+
+    PassportModule.register({
+      defaultStrategy: 'jwt',
+      session: false, // Desativado para APIs stateless
+      property: 'user', // Onde os dados do usuário serão armazenados
+    }),
+
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      useFactory: async (configService: ConfigService) => ({
+        secret: configService.get<string>('JWT_SECRET'),
+        signOptions: {
+          expiresIn: configService.get<string>('JWT_EXPIRES_IN'),
+          issuer: configService.get<string>('JWT_ISSUER'),
+          algorithm: 'HS256', // Algoritmo recomendado
+        },
+        verifyOptions: {
+          algorithms: ['HS256'],
+          issuer: configService.get<string>('JWT_ISSUER'),
+        },
+      }),
+      inject: [ConfigService],
     }),
   ],
-  controllers: [AuthController], // Controladores do módulo.
+  controllers: [AuthController],
   providers: [
-    AuthService, // Serviço para lógica de autenticação.
-    GoogleStrategy, // Estratégia de autenticação via Google OAuth2.
-    JwtStrategy, // Estratégia de autenticação via JWT.
-    JwtGuard, // Guard para proteger rotas com JWT.
+    AuthService,
+    GoogleStrategy,
+    JwtStrategy,
+    JwtGuard,
+    // Configuração adicional para serialização
+    {
+      provide: 'JWT_CONFIG',
+      useFactory: (configService: ConfigService) => ({
+        cookieName: 'jwt',
+        domain: configService.get('COOKIE_DOMAIN'),
+      }),
+      inject: [ConfigService],
+    },
   ],
-  exports: [
-    AuthService, // Exporta o AuthService para uso em outros módulos.
-    JwtGuard, // Exporta o JwtGuard para uso em outros módulos.
-  ],
+  exports: [AuthService, JwtGuard, JwtModule],
 })
 export class AuthModule {}
 

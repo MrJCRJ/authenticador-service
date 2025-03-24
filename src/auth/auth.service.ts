@@ -1,67 +1,136 @@
 // src/auth/auth.service.ts
 import { Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
+import * as Joi from 'joi';
+
+interface GoogleUser {
+  id?: string;
+  sub?: string;
+  email: string;
+  name: string;
+  picture?: string;
+  locale?: string;
+  verified?: boolean;
+  accessToken: string;
+  refreshToken?: string;
+}
+
+interface JwtPayload {
+  sub: string;
+  email: string;
+  name?: string;
+  picture?: string;
+  locale?: string;
+  verified?: boolean;
+  iat?: number;
+  exp?: number;
+}
 
 @Injectable()
 export class AuthService {
-  // Logger personalizado para o AuthService, com emojis para logs divertidos e intuitivos 🎉
   private readonly logger = new Logger(AuthService.name);
+  private readonly payloadSchema = Joi.object({
+    sub: Joi.string().required(),
+    email: Joi.string().email().required(),
+    name: Joi.string().optional(),
+    picture: Joi.string().uri().optional(),
+    locale: Joi.string().optional(),
+    verified: Joi.boolean().optional(),
+    iat: Joi.number().optional(),
+    exp: Joi.number().optional(),
+  });
 
-  constructor(private readonly jwtService: JwtService) {}
+  constructor(
+    private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
+  ) {}
 
   /**
-   * Gera um token JWT com base nos dados do usuário.
-   *
-   * @param user - Objeto contendo informações do usuário (email e nome).
-   * @returns Token JWT assinado.
+   * Gera um token JWT seguro com informações do usuário
    */
-  generateToken(user: any): string {
-    // Cria o payload do token com informações do usuário.
-    const payload = { email: user.email, sub: user.name };
+  generateToken(user: GoogleUser): string {
+    const payload: JwtPayload = {
+      sub: user.id || user.sub || user.email,
+      email: user.email,
+      name: user.name,
+      picture: user.picture,
+      locale: user.locale,
+      verified: user.verified,
+    };
 
-    // Log intuitivo: geração do token.
-    this.logger.log(`🔐 Gerando token JWT para o usuário: ${user.email}`);
+    this.validatePayload(payload);
 
-    // Gera e retorna o token JWT.
-    const token = this.jwtService.sign(payload);
-
-    // Log divertido: token gerado (⚠️ cuidado com logs sensíveis em produção!).
     this.logger.log(
-      `🎫 Token JWT gerado: ${token.slice(0, 15)}... (truncado por segurança)`,
+      `🔐 Gerando token para: ${user.email.replace(/(?<=.).(?=.*@)/g, '*')}`,
+    );
+    this.logger.debug(
+      `Token payload: ${JSON.stringify({ ...payload, sub: '***' })}`,
     );
 
-    return token;
+    return this.jwtService.sign(payload, {
+      expiresIn: this.configService.get('JWT_EXPIRES_IN', '1h'),
+      secret: this.configService.get('JWT_SECRET'),
+      issuer: this.configService.get('JWT_ISSUER'),
+      audience: this.configService.get('JWT_AUDIENCE'),
+    });
   }
 
   /**
-   * Valida um token JWT.
-   *
-   * @param token - Token JWT a ser validado.
-   * @returns Payload do token se válido, ou `null` se inválido ou expirado.
+   * Validação completa do token JWT
    */
-  validateToken(token: string): any {
-    // Log intuitivo: início da validação do token.
-    this.logger.log(`🔍 Validando token JWT: ${token.slice(0, 15)}...`);
-
+  async validateToken(token: string): Promise<GoogleUser> {
     try {
-      // Verifica e decodifica o token.
-      const payload = this.jwtService.verify(token);
+      const payload = this.jwtService.verify<JwtPayload>(token, {
+        secret: this.configService.get('JWT_SECRET'),
+        issuer: this.configService.get('JWT_ISSUER'),
+        audience: this.configService.get('JWT_AUDIENCE'),
+      });
 
-      // Log divertido: token validado com sucesso.
-      this.logger.log(`✅ Token JWT válido para o usuário: ${payload.email}`);
+      this.validatePayload(payload);
 
-      return payload;
+      return {
+        id: payload.sub,
+        email: payload.email,
+        name: payload.name,
+        picture: payload.picture,
+        locale: payload.locale,
+        verified: payload.verified,
+        accessToken: '', // Preenchido posteriormente
+      };
     } catch (error) {
-      // Verifica se o erro é uma instância de Error antes de acessar a propriedade message.
-      if (error instanceof Error) {
-        // Log de erro: token inválido ou expirado.
-        this.logger.error(`❌ Falha na validação do token: ${error.message}`);
-      } else {
-        // Log de erro genérico caso o erro não seja uma instância de Error.
-        this.logger.error('❌ Falha na validação do token: Erro desconhecido');
-      }
+      this.logger.error(
+        `❌ Falha na validação: ${error instanceof Error ? error.message : 'Erro desconhecido'}`,
+      );
+      throw new Error('Token inválido ou expirado');
+    }
+  }
 
-      return null; // Retorna null para tokens inválidos ou expirados.
+  /**
+   * Valida a estrutura do payload JWT
+   */
+  private validatePayload(payload: JwtPayload): void {
+    const { error } = this.payloadSchema.validate(payload);
+    if (error) {
+      this.logger.error(`❌ Payload JWT inválido: ${error.message}`);
+      throw new Error('Payload JWT inválido');
+    }
+  }
+
+  /**
+   * Decodificação segura para logs
+   */
+  decodeToken(token: string): JwtPayload | null {
+    try {
+      const payload = this.jwtService.decode(token) as JwtPayload;
+      return payload
+        ? { ...payload, email: payload.email?.replace(/(?<=.).(?=.*@)/g, '*') }
+        : null;
+    } catch (error) {
+      this.logger.error(
+        `❌ Falha ao decodificar token: ${error instanceof Error ? error.message : 'Erro desconhecido'}`,
+      );
+      return null;
     }
   }
 }
