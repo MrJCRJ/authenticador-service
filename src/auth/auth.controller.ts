@@ -8,6 +8,7 @@ import { Response, Request } from 'express';
 import axios, { AxiosError } from 'axios';
 import 'express-session'; // Importa o módulo express-session para estender suas definições
 import * as jwt from 'jsonwebtoken';
+import * as passport from 'passport';
 
 declare module 'express-session' {
   interface SessionData {
@@ -42,8 +43,13 @@ export class AuthController {
   }
 
   @Get('google')
-  async googleAuth(@Req() req, @Res() res: Response) {
+  async googleAuth(@Req() req: Request, @Res() res: Response) {
     this.logger.log('🔄 Redirecionando para o Google...');
+
+    return passport.authenticate('google', {
+      scope: ['email', 'profile'],
+      state: req.query.state as string, // Converte para string se necessário.
+    })(req, res);
   }
 
   @Get('google/callback')
