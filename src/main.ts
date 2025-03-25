@@ -13,6 +13,7 @@ import {
   makeCounterProvider,
   PrometheusModule,
 } from '@willsoto/nestjs-prometheus';
+import { Registry } from 'prom-client';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -27,15 +28,20 @@ async function bootstrap() {
 
   // Configuração do Prometheus (se habilitado)
   if (configService.get('PROMETHEUS_ENABLED') === 'true') {
-    // Configuração básica do Prometheus
-    PrometheusModule.register({
-      defaultMetrics: {
-        enabled: true,
-      },
+    const registry = new Registry();
+    registry.setDefaultLabels({
+      app: 'authenticator-service',
+    });
+
+    // Habilita métricas padrão
+    const collectDefaultMetrics = require('prom-client').collectDefaultMetrics;
+    collectDefaultMetrics({
+      register: registry,
+      timeout: 5000,
     });
 
     logger.log({
-      message: '📊 Prometheus configurado',
+      message: '📊 Prometheus configurado e coletando métricas',
       ...logContext,
     });
   }

@@ -3,16 +3,17 @@ import { Module, Logger } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { PassportModule } from '@nestjs/passport';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
-import { APP_FILTER, APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import * as Joi from 'joi';
 import { PrometheusModule } from '@willsoto/nestjs-prometheus';
 import { AppController } from './app.controller';
 import { AuthModule } from './auth/auth.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { MetricsInterceptor } from './common/interceptors/metrics.interceptor';
+import { PrometheusService } from './common/services/prometheus.service';
 
 @Module({
   imports: [
-    // Configuração de ambiente
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: `.env.${process.env.NODE_ENV || 'development'}`,
@@ -37,54 +38,61 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
       },
     }),
 
-    // Configuração do Prometheus
-    PrometheusModule.register({
-      defaultMetrics: {
-        enabled: false, // Será habilitado no main.ts se necessário
-      },
+    PrometheusModule.registerAsync({
+      useFactory: (configService: ConfigService) => ({
+        defaultMetrics: {
+          enabled: configService.get('PROMETHEUS_ENABLED') === 'true',
+        },
+        path: '/metrics',
+      }),
+      inject: [ConfigService],
     }),
 
-    // Configuração de rate limiting corrigida
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         throttlers: [
           {
-            ttl: config.get<number>('THROTTLE_TTL') * 1000, // Convertendo para milissegundos
+            ttl: config.get<number>('THROTTLE_TTL') * 1000,
             limit: config.get<number>('THROTTLE_LIMIT'),
           },
         ],
       }),
     }),
 
-    // Configuração global do Passport
     PassportModule.register({
       defaultStrategy: 'jwt',
       session: false,
     }),
 
-    // Módulos da aplicação
     AuthModule,
   ],
   controllers: [AppController],
   providers: [
-    // Filtro global de exceções
     {
       provide: APP_FILTER,
       useClass: HttpExceptionFilter,
     },
-    // Guard global de rate limiting
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
     },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: MetricsInterceptor,
+    },
+    PrometheusService,
   ],
+  exports: [PrometheusService],
 })
 export class AppModule {
   private readonly logger = new Logger(AppModule.name);
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly prometheusService: PrometheusService,
+  ) {
     this.logConfiguration();
     this.validateEnvironment();
   }

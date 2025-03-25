@@ -9,6 +9,7 @@ import {
   UnauthorizedException,
   UseFilters,
   Body,
+  Header,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { JwtGuard } from './guards/jwt.guard';
@@ -85,6 +86,12 @@ export class AuthController {
     } catch {
       return false;
     }
+  }
+
+  @Get('favicon.ico')
+  @Header('Content-Type', 'image/x-icon')
+  returnFavicon() {
+    return null; // Ou sirva um favicon real se tiver
   }
 
   @Get('error')
