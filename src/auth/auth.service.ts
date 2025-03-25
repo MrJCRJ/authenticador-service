@@ -1,10 +1,10 @@
 // src/auth/auth.service.ts
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as Joi from 'joi';
 
-interface GoogleUser {
+interface UserBase {
   id?: string;
   sub?: string;
   email: string;
@@ -12,19 +12,28 @@ interface GoogleUser {
   picture?: string;
   locale?: string;
   verified?: boolean;
+}
+
+interface GoogleUser extends UserBase {
   accessToken: string;
   refreshToken?: string;
 }
 
-interface JwtPayload {
-  sub: string;
-  email: string;
-  name?: string;
-  picture?: string;
-  locale?: string;
-  verified?: boolean;
+interface JwtPayload extends UserBase {
   iat?: number;
   exp?: number;
+}
+
+interface RefreshTokenPayload extends UserBase {
+  type: 'refresh';
+  iat?: number;
+  exp?: number;
+}
+
+interface TokenUser {
+  sub: string;
+  email: string;
+  name: string;
 }
 
 @Injectable()
@@ -33,10 +42,19 @@ export class AuthService {
   private readonly payloadSchema = Joi.object({
     sub: Joi.string().required(),
     email: Joi.string().email().required(),
-    name: Joi.string().optional(),
+    name: Joi.string().required(),
     picture: Joi.string().uri().optional(),
     locale: Joi.string().optional(),
     verified: Joi.boolean().optional(),
+    iat: Joi.number().optional(),
+    exp: Joi.number().optional(),
+  });
+
+  private readonly refreshTokenSchema = Joi.object({
+    sub: Joi.string().required(),
+    email: Joi.string().email().required(),
+    name: Joi.string().required(),
+    type: Joi.string().valid('refresh').required(),
     iat: Joi.number().optional(),
     exp: Joi.number().optional(),
   });
@@ -48,6 +66,8 @@ export class AuthService {
 
   /**
    * Gera um token JWT seguro com informações do usuário
+   * @param user Dados do usuário para inclusão no token
+   * @returns Token JWT assinado
    */
   generateToken(user: GoogleUser): string {
     const payload: JwtPayload = {
@@ -61,33 +81,55 @@ export class AuthService {
 
     this.validatePayload(payload);
 
-    this.logger.log(
-      `🔐 Gerando token para: ${user.email.replace(/(?<=.).(?=.*@)/g, '*')}`,
-    );
-    this.logger.debug(
-      `Token payload: ${JSON.stringify({ ...payload, sub: '***' })}`,
-    );
+    this.logTokenActivity('Gerando token de acesso para', user.email);
 
-    return this.jwtService.sign(payload, {
-      expiresIn: this.configService.get('JWT_EXPIRES_IN', '1h'),
-      secret: this.configService.get('JWT_SECRET'),
-      issuer: this.configService.get('JWT_ISSUER'),
-      audience: this.configService.get('JWT_AUDIENCE'),
-    });
+    return this.jwtService.sign(payload, this.getAccessTokenOptions());
   }
 
   /**
-   * Validação completa do token JWT
+   * Gera um refresh token para renovação de sessão
+   * @param user Dados do usuário para inclusão no token
+   * @returns Refresh token JWT assinado
    */
-  async validateToken(token: string): Promise<GoogleUser> {
+  generateRefreshToken(user: GoogleUser): string {
+    const payload: RefreshTokenPayload = {
+      sub: user.id || user.sub || user.email,
+      email: user.email,
+      name: user.name, // Garantindo que name está presente
+      type: 'refresh',
+    };
+
+    const { error } = this.refreshTokenSchema.validate(payload);
+    if (error) {
+      this.logger.error(
+        `❌ Payload de refresh token inválido: ${error.message}`,
+      );
+      throw new Error('Payload de refresh token inválido');
+    }
+
+    this.logTokenActivity('Gerando refresh token para', user.email);
+
+    return this.jwtService.sign(payload, this.getRefreshTokenOptions());
+  }
+
+  /**
+   * Validação completa do token JWT de acesso
+   * @param token Token JWT a ser validado
+   * @returns Dados do usuário contidos no token
+   * @throws UnauthorizedException Se o token for inválido
+   */
+  async validateAccessToken(token: string): Promise<GoogleUser> {
     try {
       const payload = this.jwtService.verify<JwtPayload>(token, {
-        secret: this.configService.get('JWT_SECRET'),
-        issuer: this.configService.get('JWT_ISSUER'),
-        audience: this.configService.get('JWT_AUDIENCE'),
+        secret: this.configService.getOrThrow<string>('JWT_SECRET'),
+        issuer: this.configService.get<string>('JWT_ISSUER'),
+        audience: this.configService.get<string>('JWT_AUDIENCE'),
+        algorithms: ['HS256'],
       });
 
       this.validatePayload(payload);
+
+      this.logTokenActivity('Token de acesso validado para', payload.email);
 
       return {
         id: payload.sub,
@@ -96,18 +138,84 @@ export class AuthService {
         picture: payload.picture,
         locale: payload.locale,
         verified: payload.verified,
-        accessToken: '', // Preenchido posteriormente
+        accessToken: token,
       };
     } catch (error) {
-      this.logger.error(
-        `❌ Falha na validação: ${error instanceof Error ? error.message : 'Erro desconhecido'}`,
-      );
-      throw new Error('Token inválido ou expirado');
+      this.logValidationError('Token de acesso', error);
+      throw new UnauthorizedException('Token de acesso inválido ou expirado');
     }
   }
 
   /**
+   * Validação completa do refresh token JWT
+   * @param token Refresh token a ser validado
+   * @returns Dados básicos do usuário contidos no token
+   * @throws UnauthorizedException Se o token for inválido
+   */
+  async validateRefreshToken(
+    token: string,
+  ): Promise<{ sub: string; email: string; name: string }> {
+    // Adicionado name no retorno
+    try {
+      const payload = this.jwtService.verify<RefreshTokenPayload>(token, {
+        secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
+        algorithms: ['HS256'],
+      });
+
+      const { error } = this.refreshTokenSchema.validate(payload);
+      if (error || payload.type !== 'refresh') {
+        throw new Error('Tipo de token inválido');
+      }
+
+      this.logTokenActivity('Refresh token validado para', payload.email);
+
+      return {
+        sub: payload.sub,
+        email: payload.email,
+        name: payload.name,
+      };
+    } catch (error) {
+      this.logValidationError('Refresh token', error);
+      throw new UnauthorizedException('Refresh token inválido ou expirado');
+    }
+  }
+
+  /**
+   * Renova tokens usando um refresh token válido
+   * @param refreshToken Refresh token JWT
+   * @returns Novo par de tokens (access e refresh)
+   * @throws UnauthorizedException Se o refresh token for inválido
+   */
+  async refreshTokens(
+    refreshToken: string,
+  ): Promise<{ accessToken: string; refreshToken: string }> {
+    const { sub, email, name } = await this.validateRefreshToken(refreshToken);
+
+    const userData: GoogleUser = {
+      sub,
+      email,
+      name,
+      accessToken: '', // Será preenchido posteriormente
+      picture: undefined,
+      locale: undefined,
+      verified: undefined,
+    };
+
+    const newAccessToken = this.generateToken(userData);
+    const newRefreshToken = this.generateRefreshToken(userData);
+
+    this.logger.log(`♻️ Tokens renovados para: ${this.obfuscateEmail(email)}`);
+
+    return {
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+    };
+  }
+
+  /**
    * Valida a estrutura do payload JWT
+   * @param payload Dados do token a serem validados
+   * @throws Error Se o payload for inválido
    */
   private validatePayload(payload: JwtPayload): void {
     const { error } = this.payloadSchema.validate(payload);
@@ -118,14 +226,19 @@ export class AuthService {
   }
 
   /**
-   * Decodificação segura para logs
+   * Decodificação segura para logs (não verifica assinatura)
+   * @param token Token JWT a ser decodificado
+   * @returns Payload decodificado ou null se inválido
    */
   decodeToken(token: string): JwtPayload | null {
     try {
       const payload = this.jwtService.decode(token) as JwtPayload;
-      return payload
-        ? { ...payload, email: payload.email?.replace(/(?<=.).(?=.*@)/g, '*') }
-        : null;
+      if (!payload) return null;
+
+      return {
+        ...payload,
+        email: this.obfuscateEmail(payload.email),
+      };
     } catch (error) {
       this.logger.error(
         `❌ Falha ao decodificar token: ${error instanceof Error ? error.message : 'Erro desconhecido'}`,
@@ -133,114 +246,36 @@ export class AuthService {
       return null;
     }
   }
-}
 
-/**Sugestões de Melhoria (Para Implementar):
-Tipagem do Payload:
+  private getAccessTokenOptions() {
+    return {
+      expiresIn: this.configService.get<string>('JWT_EXPIRES_IN', '1h'),
+      secret: this.configService.getOrThrow<string>('JWT_SECRET'),
+      issuer: this.configService.get<string>('JWT_ISSUER'),
+      audience: this.configService.get<string>('JWT_AUDIENCE'),
+    };
+  }
 
-Crie uma interface para o payload do token JWT, evitando o uso de any.
+  private getRefreshTokenOptions() {
+    return {
+      expiresIn: this.configService.get<string>('JWT_REFRESH_EXPIRES_IN', '7d'),
+      secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
+    };
+  }
 
-typescript
-Copy
-interface JwtPayload {
-  email: string;
-  sub: string; // ID ou nome do usuário.
-}
+  private logTokenActivity(action: string, email: string) {
+    this.logger.log(`${action}: ${this.obfuscateEmail(email)}`);
+  }
 
-generateToken(user: { email: string; name: string }): string {
-  const payload: JwtPayload = { email: user.email, sub: user.name };
-  return this.jwtService.sign(payload);
-}
-Suporte a Refresh Tokens:
+  private logValidationError(tokenType: string, error: unknown) {
+    this.logger.error(
+      `❌ Falha na validação de ${tokenType}: ${error instanceof Error ? error.message : 'Erro desconhecido'}`,
+      error instanceof Error ? error.stack : '',
+    );
+  }
 
-Adicione métodos para gerar e validar refresh tokens.
-
-typescript
-Copy
-generateRefreshToken(user: any): string {
-  const payload = { email: user.email, sub: user.name, type: 'refresh' };
-  return this.jwtService.sign(payload, { expiresIn: '7d' });
-}
-
-validateRefreshToken(token: string): any {
-  try {
-    return this.jwtService.verify(token);
-  } catch (error) {
-    return null;
+  private obfuscateEmail(email: string): string {
+    const [name, domain] = email.split('@');
+    return `${name[0]}${'*'.repeat(Math.max(0, name.length - 1))}@${domain}`;
   }
 }
-Auditoria de Tokens:
-
-Registre a geração e validação de tokens em um sistema de auditoria.
-
-typescript
-Copy
-generateToken(user: any): string {
-  const payload = { email: user.email, sub: user.name };
-  const token = this.jwtService.sign(payload);
-
-  // Log de auditoria.
-  this.logger.log(`📝 Auditoria: Token gerado para ${user.email}`);
-  return token;
-}
-Configuração Dinâmica:
-
-Use o ConfigService para carregar opções de expiração e chaves secretas dinamicamente.
-
-typescript
-Copy
-constructor(
-  private readonly jwtService: JwtService,
-  private readonly configService: ConfigService,
-) {}
-
-generateToken(user: any): string {
-  const payload = { email: user.email, sub: user.name };
-  return this.jwtService.sign(payload, {
-    expiresIn: this.configService.get<string>('JWT_EXPIRES_IN', '1h'),
-  });
-}
-Testes Automatizados:
-
-Adicione testes unitários para garantir que os métodos funcionem corretamente.
-
-typescript
-Copy
-describe('AuthService', () => {
-  let authService: AuthService;
-  let jwtService: JwtService;
-
-  beforeEach(() => {
-    jwtService = new JwtService({ secret: 'test-secret' });
-    authService = new AuthService(jwtService);
-  });
-
-  it('deve gerar um token JWT válido', () => {
-    const token = authService.generateToken({ email: 'test@test.com', name: 'Test' });
-    expect(token).toBeDefined();
-  });
-});
-Segurança:
-
-Adicione validações adicionais para garantir que o payload do token contenha os campos necessários.
-
-typescript
-Copy
-validateToken(token: string): any {
-  try {
-    const payload = this.jwtService.verify(token);
-    if (!payload.email || !payload.sub) {
-      throw new Error('Payload do token inválido');
-    }
-    return payload;
-  } catch (error) {
-    return null;
-  }
-}
-Exemplo de Saída de Logs:
-Copy
-🔐 Gerando token JWT para o usuário: joao@gmail.com
-🎫 Token JWT gerado: eyJhbGciOiJIUzI1Ni... (truncado por segurança)
-🔍 Validando token JWT: eyJhbGciOiJIUzI1Ni...
-✅ Token JWT válido para o usuário: joao@gmail.com
- */

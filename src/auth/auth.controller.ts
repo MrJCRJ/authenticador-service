@@ -8,6 +8,7 @@ import {
   Post,
   UnauthorizedException,
   UseFilters,
+  Body,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { JwtGuard } from './guards/jwt.guard';
@@ -293,5 +294,19 @@ export class AuthController {
       locale: user.locale,
       verified: user.verified,
     };
+  }
+
+  @Post('refresh')
+  async refresh(
+    @Body('refreshToken') refreshToken: string,
+    @Res() res: Response,
+  ) {
+    const { accessToken, refreshToken: newRefreshToken } =
+      await this.authService.refreshTokens(refreshToken);
+
+    res.cookie('accessToken', accessToken, { httpOnly: true });
+    res.cookie('refreshToken', newRefreshToken, { httpOnly: true });
+
+    return res.json({ success: true });
   }
 }
