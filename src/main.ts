@@ -5,20 +5,68 @@ import cookieParser from 'cookie-parser';
 import session from 'express-session';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { ValidationPipe } from '@nestjs/common';
+import * as helmet from 'helmet';
+import * as rateLimit from 'express-rate-limit';
+import {
+  makeCounterProvider,
+  PrometheusModule,
+} from '@willsoto/nestjs-prometheus';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
   const logger = new Logger('Bootstrap');
 
+  // Configuração de logs estruturados
+  const logContext = {
+    environment: configService.get('NODE_ENV') || 'development',
+    timestamp: new Date().toISOString(),
+  };
+
+  // Configuração do Prometheus (se habilitado)
+  if (configService.get('PROMETHEUS_ENABLED') === 'true') {
+    // Configuração básica do Prometheus
+    PrometheusModule.register({
+      defaultMetrics: {
+        enabled: true,
+      },
+    });
+
+    logger.log({
+      message: '📊 Prometheus configurado',
+      ...logContext,
+    });
+  }
+
+  // Middleware de segurança
+  app.use(helmet.default());
+  logger.log({
+    message: '🔒 Middlewares de segurança configurados',
+    ...logContext,
+  });
+
+  // Rate limiting
+  app.use(
+    rateLimit.default({
+      windowMs: 15 * 60 * 1000, // 15 minutos
+      max: configService.get<number>('RATE_LIMIT_MAX', 100),
+      message: '⚠️ Muitas requisições deste IP, tente novamente mais tarde',
+    }),
+  );
+
   // Middleware para manipulação de cookies
   app.use(cookieParser());
-  logger.log('🍪 Cookie-parser configurado com sucesso!');
+  logger.log({
+    message: '🍪 Cookie-parser configurado',
+    ...logContext,
+  });
 
   // Configuração do express-session
   app.use(
     session({
-      secret: configService.get('SESSION_SECRET') || 'sua_chave_secreta_aqui',
+      secret: configService.getOrThrow<string>('SESSION_SECRET'),
       resave: false,
       saveUninitialized: false,
       cookie: {
@@ -33,7 +81,10 @@ async function bootstrap() {
       },
     }),
   );
-  logger.log('🔒 Express-session configurado com sucesso!');
+  logger.log({
+    message: '🔐 Express-session configurado',
+    ...logContext,
+  });
 
   // Configuração robusta do CORS
   const allowedOrigins = [
@@ -47,9 +98,11 @@ async function bootstrap() {
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        logger.warn(
-          `⚠️ Tentativa de acesso de origem não permitida: ${origin}`,
-        );
+        logger.warn({
+          message: '⚠️ Tentativa de acesso de origem não permitida',
+          origin,
+          ...logContext,
+        });
         callback(new Error('Not allowed by CORS'));
       }
     },
@@ -63,96 +116,56 @@ async function bootstrap() {
     ],
     exposedHeaders: ['Authorization'],
   });
-  logger.log(`🌍 CORS configurado para origens: ${allowedOrigins.join(', ')}`);
+  logger.log({
+    message: '🌍 CORS configurado',
+    allowedOrigins,
+    ...logContext,
+  });
+
+  // Validação global
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  );
+
+  // Configuração do Swagger (apenas em desenvolvimento)
+  if (configService.get('NODE_ENV') !== 'production') {
+    const config = new DocumentBuilder()
+      .setTitle('API Documentation')
+      .setDescription('Documentação completa da API')
+      .setVersion('1.0')
+      .addBearerAuth()
+      .build();
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('api-docs', app, document);
+    logger.log({
+      message: '📚 Swagger configurado em /api-docs',
+      ...logContext,
+    });
+  }
 
   // Inicia o servidor HTTP
-  const port = configService.get('PORT') || 3000;
+  const port = configService.get<number>('PORT', 3000);
   await app.listen(port);
 
-  logger.log(`🚀 Aplicação rodando em: ${await app.getUrl()}`);
-  logger.log(`🏁 Ambiente: ${configService.get('NODE_ENV') || 'development'}`);
+  logger.log({
+    message: '🚀 Aplicação iniciada com sucesso',
+    url: await app.getUrl(),
+    port,
+    ...logContext,
+  });
 }
 
 bootstrap().catch((error) => {
   const logger = new Logger('Bootstrap');
-  logger.error(`💥 Falha ao iniciar a aplicação: ${error.message}`);
+  logger.error({
+    message: '💥 Falha ao iniciar a aplicação',
+    error: error.message,
+    stack: error.stack,
+    timestamp: new Date().toISOString(),
+  });
   process.exit(1);
 });
-
-/**Sugestões de Melhoria (Para Implementar):
-Configuração Dinâmica:
-
-Use o ConfigService para carregar configurações dinamicamente (por exemplo, porta, URL do frontend).
-
-typescript
-Copy
-const configService = app.get(ConfigService);
-const port = configService.get<number>('PORT', 3000);
-const frontendUrl = configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
-Documentação com Swagger:
-
-Adicione o SwaggerModule para documentar a API.
-
-typescript
-Copy
-import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
-
-const config = new DocumentBuilder()
-  .setTitle('API Documentation')
-  .setDescription('Descrição da API')
-  .setVersion('1.0')
-  .build();
-const document = SwaggerModule.createDocument(app, config);
-SwaggerModule.setup('api', app, document);
-Segurança Adicional:
-
-Adicione middlewares de segurança, como helmet e rate-limiting.
-
-typescript
-Copy
-import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
-
-app.use(helmet());
-app.use(
-  rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutos
-    max: 100, // Limite de 100 requisições por IP
-  }),
-);
-Monitoramento:
-
-Adicione suporte para ferramentas de monitoramento (por exemplo, Prometheus).
-
-typescript
-Copy
-import { PrometheusModule } from '@willsoto/nestjs-prometheus';
-
-app.use('/metrics', PrometheusModule.createHandler());
-Testes Automatizados:
-
-Adicione testes de integração para garantir que a aplicação inicialize corretamente.
-
-typescript
-Copy
-describe('Bootstrap', () => {
-  it('deve iniciar a aplicação sem erros', async () => {
-    await expect(bootstrap()).resolves.not.toThrow();
-  });
-});
-Logs Estruturados:
-
-Use logs estruturados (em formato JSON) para facilitar a análise em ferramentas de monitoramento.
-
-typescript
-Copy
-logger.log({
-  message: 'Aplicação iniciada com sucesso',
-  port,
-  url: await app.getUrl(),
-});
-Exemplo de Saída de Logs:
-Copy
-🍪 Cookie-parser configurado com sucesso!
-🌍 CORS configurado com sucesso!
-🚀 Aplicação rodando em: http://localhost:3000 */

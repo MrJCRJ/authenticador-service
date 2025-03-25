@@ -5,6 +5,7 @@ import { PassportModule } from '@nestjs/passport';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import * as Joi from 'joi';
+import { PrometheusModule } from '@willsoto/nestjs-prometheus';
 import { AppController } from './app.controller';
 import { AuthModule } from './auth/auth.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
@@ -28,10 +29,18 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
         JWT_REFRESH_SECRET: Joi.string().required(),
         THROTTLE_TTL: Joi.number().default(60),
         THROTTLE_LIMIT: Joi.number().default(100),
+        PROMETHEUS_ENABLED: Joi.boolean().default(false),
       }),
       validationOptions: {
         allowUnknown: true,
         abortEarly: false,
+      },
+    }),
+
+    // Configuração do Prometheus
+    PrometheusModule.register({
+      defaultMetrics: {
+        enabled: false, // Será habilitado no main.ts se necessário
       },
     }),
 
@@ -84,6 +93,9 @@ export class AppModule {
     this.logger.log('🚀 Módulo principal da aplicação carregado com sucesso!');
     this.logger.log(`🏷️ Ambiente: ${this.configService.get('NODE_ENV')}`);
     this.logger.log(`🌐 Porta: ${this.configService.get('PORT')}`);
+    this.logger.log(
+      `📊 Prometheus: ${this.configService.get('PROMETHEUS_ENABLED') ? '✔️ Habilitado' : '❌ Desabilitado'}`,
+    );
 
     // Log seguro (não mostra valores sensíveis)
     this.logger.log('🔑 Configurações:');
