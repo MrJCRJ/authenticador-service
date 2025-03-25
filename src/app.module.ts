@@ -1,151 +1,123 @@
 // src/app.module.ts
-
 import { Module, Logger } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AuthModule } from './auth/auth.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { PassportModule } from '@nestjs/passport';
-import * as Joi from 'joi'; // Para validação de variáveis de ambiente
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
+import * as Joi from 'joi';
+import { AppController } from './app.controller';
+import { AuthModule } from './auth/auth.module';
+import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
 @Module({
   imports: [
+    // Configuração de ambiente
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: `.env.${process.env.NODE_ENV || 'development'}`,
       validationSchema: Joi.object({
         NODE_ENV: Joi.string()
-          .valid('development', 'production', 'test')
+          .valid('development', 'production', 'test', 'staging')
           .default('development'),
-        PORT: Joi.number().default(3000),
+        PORT: Joi.number().port().default(3000),
         SESSION_SECRET: Joi.string().required(),
         GOOGLE_CLIENT_ID: Joi.string().required(),
         GOOGLE_CLIENT_SECRET: Joi.string().required(),
         FRONTEND_URLS: Joi.string().required(),
         JWT_SECRET: Joi.string().required(),
+        JWT_REFRESH_SECRET: Joi.string().required(),
+        THROTTLE_TTL: Joi.number().default(60),
+        THROTTLE_LIMIT: Joi.number().default(100),
       }),
       validationOptions: {
         allowUnknown: true,
-        abortEarly: true,
+        abortEarly: false,
       },
+    }),
+
+    // Configuração de rate limiting corrigida
+    ThrottlerModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        throttlers: [
+          {
+            ttl: config.get<number>('THROTTLE_TTL') * 1000, // Convertendo para milissegundos
+            limit: config.get<number>('THROTTLE_LIMIT'),
+          },
+        ],
+      }),
     }),
 
     // Configuração global do Passport
     PassportModule.register({
-      defaultStrategy: 'google',
-      session: true,
+      defaultStrategy: 'jwt',
+      session: false,
     }),
 
+    // Módulos da aplicação
     AuthModule,
   ],
   controllers: [AppController],
-  providers: [],
+  providers: [
+    // Filtro global de exceções
+    {
+      provide: APP_FILTER,
+      useClass: HttpExceptionFilter,
+    },
+    // Guard global de rate limiting
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+  ],
 })
 export class AppModule {
   private readonly logger = new Logger(AppModule.name);
 
   constructor(private readonly configService: ConfigService) {
     this.logConfiguration();
+    this.validateEnvironment();
   }
 
   private logConfiguration() {
     this.logger.log('🚀 Módulo principal da aplicação carregado com sucesso!');
     this.logger.log(`🏷️ Ambiente: ${this.configService.get('NODE_ENV')}`);
-    this.logger.log(
-      `🌍 Frontend URLs: ${this.configService.get('FRONTEND_URLS')}`,
-    );
+    this.logger.log(`🌐 Porta: ${this.configService.get('PORT')}`);
 
     // Log seguro (não mostra valores sensíveis)
-    this.logger.log('🔑 Configuração do Google OAuth:');
+    this.logger.log('🔑 Configurações:');
     this.logger.log(
-      `- Client ID: ${this.configService.get('GOOGLE_CLIENT_ID') ? '✔️ Configurado' : '❌ Ausente'}`,
+      `- Google OAuth: ${this.configService.get('GOOGLE_CLIENT_ID') ? '✔️ Configurado' : '❌ Ausente'}`,
     );
     this.logger.log(
-      `- Client Secret: ${this.configService.get('GOOGLE_CLIENT_SECRET') ? '✔️ Configurado' : '❌ Ausente'}`,
+      `- JWT: ${this.configService.get('JWT_SECRET') ? '✔️ Configurado' : '❌ Ausente'}`,
     );
   }
+
+  private validateEnvironment() {
+    if (this.configService.get('NODE_ENV') === 'production') {
+      this.logger.warn(
+        '⚠️ Ambiente de produção - verificando configurações críticas...',
+      );
+
+      const requiredInProd = [
+        'SESSION_SECRET',
+        'JWT_SECRET',
+        'JWT_REFRESH_SECRET',
+      ];
+      const missing = requiredInProd.filter(
+        (key) => !this.configService.get(key),
+      );
+
+      if (missing.length > 0) {
+        this.logger.error(
+          `❌ Configurações ausentes em produção: ${missing.join(', ')}`,
+        );
+        throw new Error(
+          'Configurações críticas ausentes em ambiente de produção',
+        );
+      }
+    }
+  }
 }
-
-/**Sugestões de Melhoria (Para Implementar):
-Suporte a Múltiplos Ambientes:
-
-Adicione suporte para diferentes arquivos .env com base no ambiente.
-
-typescript
-Copy
-envFilePath: `.env.${process.env.NODE_ENV || 'development'}`,
-Módulos Adicionais:
-
-Adicione outros módulos conforme necessário (por exemplo, UsersModule, DatabaseModule).
-
-typescript
-Copy
-imports: [ConfigModule.forRoot({ isGlobal: true }), AuthModule, UsersModule],
-Documentação com Swagger:
-
-Adicione o SwaggerModule para documentar a API.
-
-typescript
-Copy
-import { SwaggerModule } from '@nestjs/swagger';
-
-@Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), AuthModule, SwaggerModule],
-})
-Tratamento de Erros Global:
-
-Adicione um filtro de exceções global para capturar e tratar erros.
-
-typescript
-Copy
-import { APP_FILTER } from '@nestjs/core';
-import { HttpExceptionFilter } from './common/filters/http-exception.filter';
-
-@Module({
-  providers: [
-    {
-      provide: APP_FILTER,
-      useClass: HttpExceptionFilter,
-    },
-  ],
-})
-Testes Automatizados:
-
-Adicione testes de integração para garantir que o módulo funcione corretamente.
-
-typescript
-Copy
-describe('AppModule', () => {
-  it('deve carregar o módulo corretamente', () => {
-    const module = new AppModule();
-    expect(module).toBeDefined();
-  });
-});
-Segurança:
-
-Adicione proteção contra ataques comuns (por exemplo, CORS, rate limiting).
-
-typescript
-Copy
-import { ThrottlerModule } from '@nestjs/throttler';
-
-@Module({
-  imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
-    ThrottlerModule.forRoot({ ttl: 60, limit: 10 }), // Limita a 10 requisições por minuto.
-    AuthModule,
-  ],
-})
-Monitoramento:
-
-Adicione suporte para ferramentas de monitoramento (por exemplo, Prometheus, New Relic).
-
-typescript
-Copy
-import { PrometheusModule } from '@willsoto/nestjs-prometheus';
-
-@Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), AuthModule, PrometheusModule],
-})
-Exemplo de Saída de Logs:
-Copy
-🚀 Módulo principal da aplicação carregado com sucesso! */
