@@ -9,10 +9,6 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ValidationPipe } from '@nestjs/common';
 import * as helmet from 'helmet';
 import * as rateLimit from 'express-rate-limit';
-import {
-  makeCounterProvider,
-  PrometheusModule,
-} from '@willsoto/nestjs-prometheus';
 import { Registry } from 'prom-client';
 
 async function bootstrap() {

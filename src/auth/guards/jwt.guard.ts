@@ -7,137 +7,110 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import * as jwt from 'jsonwebtoken';
+import { Request } from 'express';
 
-interface JwtPayloadWithExp extends jwt.JwtPayload {
-  exp: number;
+interface JwtPayloadWithUser extends jwt.JwtPayload {
+  email: string;
+  name?: string;
+  picture?: string;
 }
 
 @Injectable()
 export class JwtGuard extends AuthGuard('jwt') {
   private readonly logger = new Logger(JwtGuard.name);
-  private readonly tokenCache = new Map<string, boolean>();
-  private readonly cookieKey = process.env.JWT_COOKIE_KEY || 'jwt';
-  private readonly customHeader =
-    process.env.JWT_CUSTOM_HEADER || 'x-custom-token';
+  private readonly tokenCache = new Map<
+    string,
+    { valid: boolean; user: any }
+  >();
 
-  canActivate(context: ExecutionContext) {
-    const request = context.switchToHttp().getRequest();
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest<Request>();
 
     try {
-      const token = this.extractTokenFromRequest(request);
-      this.logStructuredTokenInfo(token, request);
+      const token = this.extractToken(request);
 
       if (!token) {
-        this.logger.warn(
-          '⚠️ Nenhum token JWT encontrado nas fontes disponíveis.',
-        );
-        throw new UnauthorizedException('Token de autenticação não fornecido.');
+        this.logger.warn('⚠️ Nenhum token JWT encontrado');
+        throw new UnauthorizedException('Token não fornecido');
       }
 
-      this.validateTokenBasic(token);
-      this.validateTokenFormat(token);
+      this.validateTokenStructure(token);
 
-      if (this.tokenCache.has(token)) {
-        this.logger.debug('♻️ Token encontrado no cache - autenticação rápida');
+      // Verifica cache primeiro
+      const cached = this.tokenCache.get(token);
+      if (cached?.valid) {
+        this.logger.debug('♻️ Usando token do cache');
+        request.user = cached.user; // Garante que o user está anexado
         return true;
       }
 
-      request.headers['authorization'] = `Bearer ${token}`;
-      this.logger.log(
-        `🔑 Token JWT definido no header: Bearer ${token.substring(0, 15)}...`,
-      );
-
-      const result = super.canActivate(context);
-
-      if (result) {
-        this.tokenCache.set(token, true);
+      // Validação completa do token
+      const payload = this.verifyToken(token);
+      if (!payload.email) {
+        throw new UnauthorizedException('Token não contém email');
       }
 
-      return result;
+      // Chama a estratégia JWT padrão
+      const parentResult = (await super.canActivate(context)) as boolean;
+      if (!parentResult) {
+        return false;
+      }
+
+      // Anexa user à requisição (garantia extra)
+      if (!request.user) {
+        request.user = {
+          email: payload.email,
+          name: payload.name,
+          picture: payload.picture,
+        };
+      }
+
+      // Atualiza cache
+      this.tokenCache.set(token, {
+        valid: true,
+        user: request.user,
+      });
+
+      this.logger.log(`✅ Autenticação válida para: ${payload.email}`);
+      return true;
     } catch (error) {
-      this.logger.error(`💥 Erro durante a autenticação: ${error}`);
+      this.logger.error(`❌ Falha na autenticação: ${error}`);
       throw new UnauthorizedException(error || 'Falha na autenticação');
     }
   }
 
-  private extractTokenFromRequest(request: any): string | undefined {
+  private extractToken(request: Request): string | null {
     return (
-      request.query?.token ||
-      request.cookies?.[this.cookieKey] ||
-      request.body?.token ||
-      request.headers[this.customHeader] ||
-      request.headers?.authorization?.split(' ')[1]
+      request.cookies?.jwt ||
+      request.headers.authorization?.split(' ')[1] ||
+      (request.query?.token as string) ||
+      null
     );
   }
 
-  private validateTokenBasic(token: string): void {
-    if (typeof token !== 'string' || token.trim() === '') {
-      this.logger.error('❌ Token inválido: deve ser uma string não vazia.');
-      throw new UnauthorizedException('Token JWT inválido.');
-    }
-  }
-
-  private validateTokenFormat(token: string): void {
+  private validateTokenStructure(token: string): void {
     const parts = token.split('.');
     if (parts.length !== 3) {
-      this.logger.error(
-        '❌ Formato do token JWT inválido (deveria ser header.payload.signature).',
-      );
-      throw new UnauthorizedException('Formato do token inválido.');
-    }
-
-    try {
-      const decoded = jwt.decode(token);
-
-      if (!decoded) {
-        throw new UnauthorizedException('Token JWT não pôde ser decodificado.');
-      }
-
-      // Verificação segura da expiração
-      if (typeof decoded === 'object' && 'exp' in decoded) {
-        const payload = decoded as JwtPayloadWithExp;
-        if (payload.exp && payload.exp < Date.now() / 1000) {
-          this.logger.error('❌ Token JWT expirado.');
-          throw new UnauthorizedException('Token expirado.');
-        }
-      }
-    } catch (error) {
-      this.logger.error(`❌ Falha na decodificação do token: ${error}`);
-      throw new UnauthorizedException('Token JWT inválido.');
+      throw new UnauthorizedException('Formato de token inválido');
     }
   }
 
-  private logStructuredTokenInfo(
-    token: string | undefined,
-    request: any,
-  ): void {
-    let source = 'não encontrado';
-    if (token) {
-      if (request.query?.token) source = 'URL';
-      else if (request.cookies?.[this.cookieKey]) source = 'Cookie';
-      else if (request.body?.token) source = 'Body';
-      else if (request.headers[this.customHeader])
-        source = `Header ${this.customHeader}`;
-      else if (request.headers?.authorization) source = 'Header Authorization';
-    }
+  private verifyToken(token: string): JwtPayloadWithUser {
+    try {
+      const payload = jwt.decode(token) as JwtPayloadWithUser;
 
-    this.logger.debug({
-      message: 'Informações do Token JWT',
-      tokenPresent: !!token,
-      tokenSource: source,
-      tokenPrefix: token ? token.substring(0, 5) + '...' : null,
-      timestamp: new Date().toISOString(),
-    });
+      if (!payload) {
+        throw new UnauthorizedException('Token inválido');
+      }
+
+      // Verifica expiração
+      if (payload.exp && payload.exp < Date.now() / 1000) {
+        throw new UnauthorizedException('Token expirado');
+      }
+
+      return payload;
+    } catch (error) {
+      throw new UnauthorizedException('Falha ao verificar token');
+    }
   }
 }
-
-/**Próximas Melhorias Possíveis:
-Blacklist de Tokens - Para implementar logout
-
-Rate Limiting - Prevenir abuso
-
-Cache com TTL - Limpar tokens expirados do cache
-
-Health Check - Verificar integridade do guard
-
-Testes Automatizados - Unitários e de integração */

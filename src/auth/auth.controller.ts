@@ -291,6 +291,10 @@ export class AuthController {
   @Get('profile')
   @UseGuards(JwtGuard)
   getProfile(@Req() req: Request) {
+    if (!req.user) {
+      throw new UnauthorizedException('User not found in request');
+    }
+
     const user = req.user as GoogleUser;
     this.logger.log(`👤 Acesso ao perfil: ${this.obfuscateEmail(user.email)}`);
 
