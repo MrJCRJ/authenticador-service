@@ -1,7 +1,11 @@
 // src/auth/strategies/google.strategy.ts
 import { Injectable, Logger } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
-import { Strategy, VerifyCallback } from 'passport-google-oauth20';
+import {
+  Strategy,
+  VerifyCallback,
+  StrategyOptionsWithRequest,
+} from 'passport-google-oauth20';
 import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
 
@@ -16,48 +20,79 @@ interface GoogleProfile {
   };
 }
 
+interface GoogleUser {
+  provider: string;
+  providerId: string;
+  email: string;
+  name: string;
+  picture: string | null;
+  locale: string;
+  accessToken: string;
+  refreshToken: string;
+}
+
+interface AuthRequest extends Request {
+  user?: GoogleUser;
+  query: {
+    state?: string;
+    [key: string]: string | undefined;
+  };
+}
+
 @Injectable()
 export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
   private readonly logger = new Logger(GoogleStrategy.name);
 
   constructor(configService: ConfigService) {
-    super({
+    const scopes = configService.get('GOOGLE_SCOPES')?.split(',') || [
+      'email',
+      'profile',
+      'https://www.googleapis.com/auth/calendar.readonly',
+    ];
+
+    // Definindo a interface estendida para as opções
+    interface ExtendedStrategyOptions extends StrategyOptionsWithRequest {
+      accessType?: 'online' | 'offline';
+      prompt?: 'none' | 'consent' | 'select_account';
+    }
+
+    const options: ExtendedStrategyOptions = {
       clientID: configService.getOrThrow('GOOGLE_CLIENT_ID'),
       clientSecret: configService.getOrThrow('GOOGLE_CLIENT_SECRET'),
       callbackURL: configService.getOrThrow('GOOGLE_CALLBACK_URL'),
-      scope: configService.get('GOOGLE_SCOPES')?.split(',') || [
-        'email',
-        'profile',
-      ],
+      scope: scopes,
       passReqToCallback: true,
-    });
+      accessType: 'offline', // Para obter refresh token
+      prompt: 'consent', // Para forçar solicitação de permissões
+    };
+
+    super(options as StrategyOptionsWithRequest);
+
+    this.logger.log(
+      `📢 Escopos do Google carregados: ${JSON.stringify(scopes)}`,
+    );
+    this.logger.log(
+      `🔗 URL de autenticação gerada: https://accounts.google.com/o/oauth2/auth?scope=${encodeURIComponent(
+        scopes.join(' '),
+      )}&access_type=offline&prompt=consent`,
+    );
   }
 
-  /**
-   * Valida o perfil do usuário autenticado via Google OAuth
-   * @param req Objeto de requisição HTTP
-   * @param accessToken Token de acesso do Google
-   * @param refreshToken Token de atualização do Google
-   * @param profile Perfil do usuário retornado pelo Google
-   * @param done Callback do Passport
-   * @returns Objeto com dados do usuário ou erro
-   */
   async validate(
-    req: Request,
+    req: AuthRequest,
     accessToken: string,
     refreshToken: string,
     profile: GoogleProfile,
     done: VerifyCallback,
-  ): Promise<any> {
+  ): Promise<void> {
     try {
-      // 1️⃣ Validação do parâmetro state (para proteção CSRF)
-      const state = req.query.state;
-      if (!state) {
+      // 1️⃣ Validação do parâmetro state (CSRF protection)
+      if (!req.query.state) {
         throw new Error('Parâmetro state é obrigatório para proteção CSRF');
       }
 
       // 2️⃣ Validação dos dados do perfil
-      if (!profile.emails || !profile.emails.length) {
+      if (!profile.emails?.length) {
         throw new Error('Perfil do Google não contém informações de email');
       }
 
@@ -66,8 +101,8 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
         throw new Error('Email do Google não verificado');
       }
 
-      // 3️⃣ Construção do objeto do usuário
-      const user = {
+      // 3️⃣ Construção do objeto do usuário com tipagem forte
+      const user: GoogleUser = {
         provider: 'google',
         providerId: profile.id,
         email: primaryEmail.value,
@@ -76,7 +111,7 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
         picture: profile.photos?.[0]?.value || null,
         locale: profile._json?.locale || 'pt-BR',
         accessToken,
-        refreshToken, // Incluído para possíveis renovações de token
+        refreshToken,
       };
 
       // 4️⃣ Log estruturado
@@ -85,17 +120,14 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
       // 5️⃣ Retorno do usuário autenticado
       done(null, user);
     } catch (error) {
-      this.logger.error(`💥 Falha na autenticação com Google: ${error}`);
-      done(error, null);
+      this.logger.error(
+        `💥 Falha na autenticação com Google: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      done(error instanceof Error ? error : new Error(String(error)), null);
     }
   }
 
-  /**
-   * Registra informações estruturadas sobre a autenticação
-   * @param user Dados do usuário autenticado
-   * @param req Objeto de requisição HTTP
-   */
-  private logStructuredAuthInfo(user: any, req: Request): void {
+  private logStructuredAuthInfo(user: GoogleUser, req: AuthRequest): void {
     this.logger.log({
       message: 'Autenticação via Google realizada com sucesso',
       user: {
@@ -108,23 +140,10 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
         userAgent: req.headers['user-agent'],
         timestamp: new Date().toISOString(),
       },
+      metadata: {
+        hasRefreshToken: !!user.refreshToken,
+        locale: user.locale,
+      },
     });
   }
 }
-
-/**Próximas Melhorias Possíveis:
-Armazenamento de Refresh Token:
-
-Implementar lógica para renovação automática de tokens
-
-Testes Automatizados:
-
-Mock do Passport e Google OAuth para testes
-
-Métricas:
-
-Integração com sistemas de monitoramento
-
-Customização:
-
-Permitir mapeamento customizado de campos do perfil */

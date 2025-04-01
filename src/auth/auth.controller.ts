@@ -177,8 +177,12 @@ export class AuthController {
         throw new UnauthorizedException('Usuário não autorizado');
       }
 
-      // Gera token de acesso
-      const token = this.authService.generateToken(user);
+      // Gera token de acesso incluindo os tokens do Google
+      const token = this.authService.generateToken({
+        ...user,
+        accessToken: user.accessToken, // Garante que está incluído
+        refreshToken: user.refreshToken, // Opcional
+      });
 
       // Configura cookies
       const cookieOptions = this.getCookieOptions();

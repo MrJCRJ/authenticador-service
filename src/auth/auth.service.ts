@@ -22,6 +22,8 @@ interface GoogleUser extends UserBase {
 interface JwtPayload extends UserBase {
   iat?: number;
   exp?: number;
+  googleAccessToken?: string; // Adicione esta linha
+  googleRefreshToken?: string; // Opcional, se quiser incluir
 }
 
 interface RefreshTokenPayload extends UserBase {
@@ -46,6 +48,8 @@ export class AuthService {
     picture: Joi.string().uri().optional(),
     locale: Joi.string().optional(),
     verified: Joi.boolean().optional(),
+    googleAccessToken: Joi.string().required(), // Adicione esta linha
+    googleRefreshToken: Joi.string().optional(), // Opcional
     iat: Joi.number().optional(),
     exp: Joi.number().optional(),
   });
@@ -77,6 +81,8 @@ export class AuthService {
       picture: user.picture,
       locale: user.locale,
       verified: user.verified,
+      googleAccessToken: user.accessToken, // Inclui o access_token do Google
+      googleRefreshToken: user.refreshToken, // Opcional - só inclua se for seguro
     };
 
     this.validatePayload(payload);
@@ -138,7 +144,8 @@ export class AuthService {
         picture: payload.picture,
         locale: payload.locale,
         verified: payload.verified,
-        accessToken: token,
+        accessToken: payload.googleAccessToken || '', // Agora vem do payload
+        refreshToken: payload.googleRefreshToken,
       };
     } catch (error) {
       this.logValidationError('Token de acesso', error);
